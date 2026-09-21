@@ -1,0 +1,15 @@
+<!DOCTYPE html>
+<html><head><meta charset="utf-8"><title>MusicSync</title></head>
+<body>
+<h1>MusicSync 控制台</h1>
+<ul>
+<li><a href="/config">配置下载目录与源优先级</a></li>
+<li><a href="/login/netease">网易云扫码登录</a></li>
+<li><a href="/login/qq">QQ音乐扫码登录</a></li>
+<li><a href="/playlists">查看已同步歌单</a></li>
+<li><a href="/download">下载任务</a></li>
+</ul>
+<p>当前下载目录: {{ config.download_dir }}</p>
+<form action="/api/sync/netease" method="post"><button>手动同步网易云歌单</button></form>
+<form action="/api/download/pending" method="post"><button>手动下载待办曲目</button></form>
+</body></html>

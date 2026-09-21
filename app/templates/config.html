@@ -1,0 +1,13 @@
+<!DOCTYPE html>
+<html><head><meta charset="utf-8"><title>配置</title></head>
+<body>
+<h1>配置</h1>
+<form method="post" action="/config">
+下载目录: <input name="download_dir" value="{{ config.download_dir }}"><br>
+源优先级, 用逗号分隔: <input name="source_order" value="{{ config.priority_order|join(',') }}"><br>
+<label><input type="checkbox" name="auto_sync" {% if config.scheduler.auto_sync %}checked{% endif %}> 定时自动同步歌单</label><br>
+<label><input type="checkbox" name="auto_download" {% if config.scheduler.auto_download %}checked{% endif %}> 定时自动下载</label><br>
+同步/下载时间 (HH:MM): <input name="sync_time" value="{{ config.scheduler.time }}"><br>
+<button type="submit">保存</button>
+</form>
+</body></html>

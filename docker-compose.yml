@@ -1,0 +1,12 @@
+version: "3.9"
+services:
+  musicsync:
+    build: .
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./data:/data
+      - ${MUSIC_DIR:-/mnt/music}:/music
+    environment:
+      - DOWNLOAD_DIR=/music
+    restart: unless-stopped

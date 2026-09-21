@@ -1,0 +1,11 @@
+fastapi
+uvicorn[standard]
+sqlalchemy
+aiofiles
+aiohttp
+mutagen
+tinytag
+pydantic
+python-multipart
+jinja2
+APScheduler
