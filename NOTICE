@@ -1,0 +1,15 @@
+# 第三方组件声明
+
+本项目的 Docker 镜像里打包/依赖了以下第三方组件，版权归各自作者所有：
+
+| 组件 | 用途 | 许可证 | 说明 |
+|---|---|---|---|
+| [@neteasecloudmusicapienhanced/api](https://github.com/neteasecloudmusicapienhanced/api) 4.40.1 | 网易云音乐接口中转（签名/加密） | MIT | 构建镜像时通过 npm 安装，未修改源码 |
+| [FFmpeg](https://ffmpeg.org/)（Debian 包 5.1.9） | 音频时长/格式处理 | LGPL/GPL | 来自 Debian 官方软件包 |
+| Node.js、Python、Supervisor | 运行时 | MIT / PSF / BSD | 来自官方镜像与 Debian 软件包 |
+
+`app/` 目录下的代码为本项目原创。洛雪(LX)兼容音源沙箱（`sources/runner.js`）为自研实现，
+实现思路参考了 [miyin](https://github.com/qwex888/miyin) 的音源运行时。
+
+**本项目只做个人已购/已授权内容的下载与备份，不提供任何音乐内容本身；**
+请遵守你所在地区的版权法规以及网易云音乐的服务条款。

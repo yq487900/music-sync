@@ -1,0 +1,366 @@
+{% extends "base.html" %}
+{% block title %}MusicSync · 歌单详情{% endblock %}
+{% block content %}
+
+<div class="card">
+  <div class="hero">
+    <span class="cover ph" id="cover-ph">🎵</span>
+    <img class="cover" id="cover" src="" alt="" style="display:none">
+    <div class="h">
+      <h1 id="pname">加载中…</h1>
+      <p class="sub" id="pmeta">正在获取歌单信息…</p>
+      <div class="btn-row">
+        <button class="btn" id="btn-refresh"><svg><use href="#ic-refresh"/></svg>刷新</button>
+        <button class="btn primary" id="btn-sync">{% if configured %}<svg><use href="#ic-check"/></svg>已勾选同步{% else %}<svg><use href="#ic-plus"/></svg>加入同步{% endif %}</button>
+        <button class="btn" id="btn-fill"><svg><use href="#ic-refresh"/></svg>扫描补齐这个歌单</button>
+        <button class="btn primary" id="btn-dlsel"><svg><use href="#ic-down"/></svg>下载勾选的</button>
+        <a class="btn" href="/playlists">返回歌单</a>
+        <button class="btn mini" id="btn-selpage">全选本页</button>
+        <button class="btn mini" id="btn-unselpage">取消本页</button>
+        <button class="btn mini" id="btn-selall">全选整个歌单</button>
+        <button class="btn mini" id="btn-unselall">取消整个歌单</button>
+      </div>
+    </div>
+  </div>
+  <div class="bar indet" id="bar" style="display:none"><i></i></div>
+  <p class="hint" id="progress" style="display:none"></p>
+</div>
+
+<div class="card">
+  <div class="searchbar">
+    <svg><use href="#ic-search"/></svg>
+    <input id="qsearch" placeholder="搜歌名 / 歌手 / 专辑">
+  </div>
+  <div class="chips" id="chips">
+    <span class="lbl">本地</span>
+    <button class="chip" data-k="local" data-v="all" data-n="total">全部<span class="n"></span></button>
+    <button class="chip" data-k="local" data-v="yes" data-n="local_yes">已下载<span class="n"></span></button>
+    <button class="chip" data-k="local" data-v="no" data-n="local_no">未下载<span class="n"></span></button>
+    <span class="sep"></span>
+    <span class="lbl">云盘</span>
+    <button class="chip" data-k="cloud" data-v="all" data-n="total">全部<span class="n"></span></button>
+    <button class="chip" data-k="cloud" data-v="in" data-n="cloud_in">在云盘<span class="n"></span></button>
+    <button class="chip" data-k="cloud" data-v="out" data-n="cloud_out">不在云盘<span class="n"></span></button>
+  </div>
+  <div id="tracks"><div class="empty"><div class="big">⏳</div>正在加载歌曲…</div></div>
+  <div class="pager" id="pager" style="display:none"></div>
+</div>
+
+{% endblock %}
+
+{% block script %}
+<script>
+const PID = {{ pid }};
+const ST = {page: 1, size: 20, q: '', local: 'all', cloud: 'all'};
+let NEED_REFRESH = 1;      // 打开页面的第一次请求：让后端重索引一遍云盘
+let SOURCES = {};
+let curItems = [];
+
+function fmtDur(s) {
+  s = Number(s) || 0;
+  return Math.floor(s / 60) + ':' + String(s % 60).padStart(2, '0');
+}
+
+/** 音源下拉：自动（网易云优先）/ 网易云官方 / 各第三方音源 */
+function sourceSelect(t) {
+  const opts = [['', '自动（网易云优先）'], ['netease', '网易云官方']];
+  for (const [id, name] of Object.entries(SOURCES)) opts.push([id, name]);
+  return `<select class="src-sel" title="选择音源">` +
+    opts.map(([v, label]) =>
+      `<option value="${esc(v)}" ${t.source_pref === v ? 'selected' : ''}>${esc(label)}</option>`
+    ).join('') + `</select>`;
+}
+
+/** 音质 / 音源标记：跟在「歌手 · 专辑 · 时长」后面显示，
+    不放右侧操作区——它的长短会顶得各行按钮左右不齐 */
+function qualTag(t) {
+  const info = [t.level, t.source_used ? '@' + t.source_used : ''].filter(Boolean).join(' · ');
+  return info ? ` · <span class="hint mono">${esc(info)}</span>` : '';
+}
+
+/* 本地 💾 / 云盘 ☁ 两个小图标由 base.html 提供（localCell / cloudCell） */
+
+function render(d) {
+  document.getElementById('pname').textContent = d.name;
+  document.getElementById('pmeta').textContent =
+    `共 ${d.total} 首 · 本地已有 ${d.local_count} 首`;
+  if (d.cover) {
+    const img = document.getElementById('cover');
+    img.src = d.cover; img.style.display = '';
+    document.getElementById('cover-ph').style.display = 'none';
+  }
+  SOURCES = d.sources || {};
+  setCloudIndex(d.cloud_index);
+  paintChips('chips', ST, d.counts);
+  const box = document.getElementById('tracks');
+  if (!d.items.length) {
+    box.innerHTML = '<div class="empty"><div class="big">🎵</div>这个歌单是空的</div>';
+    document.getElementById('pager').style.display = 'none';
+    return;
+  }
+  curItems = d.items;
+  box.innerHTML = d.items.map((t, i) => `
+    <div class="trk row-click" data-i="${i}">
+      <span class="no">
+        <input type="checkbox" class="sel" ${t.selected ? 'checked' : ''} title="勾选参与批量下载">
+      </span>
+      ${t.cover ? `<img class="cov" src="${esc(t.cover)}" alt="" loading="lazy">`
+                : phBox('ic-note')}
+      <span class="meta">
+        <strong>${t.index}. ${esc(t.title)}</strong>
+        <span>${esc(t.artist || '')}${t.album ? ' · ' + esc(t.album) : ''}${t.duration ? ' · ' + fmtDur(t.duration) : ''}${qualTag(t)}</span>
+      </span>
+      <span class="right ops">
+        ${sourceSelect(t)}
+        <button class="btn mini" data-dl="${t.track_id || ''}" data-sid="${t.sid}">下载</button>
+        ${localCell(t)}
+        ${cloudCell(t)}
+      </span>
+    </div>`).join('');
+  bindRows(box);
+  retryIfIndexBuilding(d);
+
+  const pager = document.getElementById('pager');
+  pager.style.display = '';
+  renderPager(pager, {
+    page: d.page, pages: d.pages, total: d.total, size: d.size,
+    unit: '首', sizes: [20, 50, 100, 200, 500],
+    onGo: (page, size) => { ST.page = page; ST.size = size; load(); }
+  });
+}
+
+function rowOf(el) { return el.closest('.trk'); }
+
+/** 打开歌单时后端会重索引一遍云盘 → 索引跑完自动刷一次列表，然后就停。
+    两个关键点（2026-09-22 修）：① 自动刷新用 load(true) 静默刷，不闪；
+    ② 自动刷新的请求不再触发重索引，否则「刷新→重索引→还在刷新→再刷新」会死循环。 */
+let ciRetry = 0;
+let ciReloaded = false;
+function retryIfIndexBuilding(d) {
+  const ci = d.cloud_index || {};
+  if (ci.refreshing && ciRetry < 20) startIndexWatch();
+  else ciRetry = 0;
+}
+function startIndexWatch() {
+  clearTimeout(window._ciT);
+  window._ciT = setTimeout(checkIndexDone, 5000);
+}
+async function checkIndexDone() {
+  const r = await jsonReq(`/api/playlists/${PID}/tracks?page=1&size=1`);
+  const ci = (r.ok && r.data.cloud_index) || {};
+  if (ci.refreshing && ciRetry < 20) {
+    ciRetry += 1;
+    startIndexWatch();
+    return;
+  }
+  ciRetry = 0;
+  if (!ciReloaded) {          // 索引好了 → 刷一次，然后彻底停下
+    ciReloaded = true;
+    load(true);
+  }
+}
+
+function bindRows(box) {
+  box.querySelectorAll('.sel').forEach(cb => {
+    cb.onchange = async () => {
+      const t = curItems[Number(rowOf(cb).dataset.i)];
+      if (!t.track_id) {
+        // 还没同步进库的曲目：先加入同步，再勾选
+        const r = await jsonReq('/api/playlists', 'POST', {id: PID});
+        cb.checked = false;
+        toast(r.ok ? '已加入同步，稍后刷新即可勾选' : (r.data.error || '操作失败'),
+              r.ok ? 'ok' : 'err');
+        return;
+      }
+      const r = await jsonReq('/api/tracks/select', 'POST',
+                              {ids: [t.track_id], selected: cb.checked});
+      if (!r.ok) { cb.checked = !cb.checked; toast(r.data.error || '保存失败', 'err'); }
+    };
+  });
+
+  // 点击整行 = 切换勾选；右侧操作区（下载按钮 / 音源下拉 / 状态）完全不冲突
+  box.querySelectorAll('.trk.row-click').forEach(row => {
+    row.addEventListener('click', (e) => {
+      if (e.target.closest('.right, input, select, button, a')) return;
+      const cb = row.querySelector('.sel');
+      if (!cb) return;
+      cb.checked = !cb.checked;
+      cb.dispatchEvent(new Event('change', {bubbles: true}));
+    });
+  });
+
+  box.querySelectorAll('.src-sel').forEach(sel => {
+    sel.onchange = async () => {
+      const t = curItems[Number(rowOf(sel).dataset.i)];
+      if (!t.track_id) { toast('该曲目还没同步进库，请先加入同步', 'err'); sel.value = t.source_pref || ''; return; }
+      const r = await jsonReq(`/api/tracks/${t.track_id}/source`, 'POST', {source: sel.value});
+      if (!r.ok) { toast(r.data.error || '保存失败', 'err'); return; }
+      t.source_pref = sel.value;
+      toast('音源已设为：' + r.data.label, 'ok');
+    };
+  });
+
+  box.querySelectorAll('[data-dl]').forEach(b => {
+    b.onclick = async () => {
+      const t = curItems[Number(rowOf(b).dataset.i)];
+      const sel = rowOf(b).querySelector('.src-sel');
+      if (!t.track_id) { toast('该曲目还没同步进库，请先加入同步', 'err'); return; }
+      b.disabled = true;
+      const r = await jsonReq(`/api/tracks/${t.track_id}/download`, 'POST',
+                              {source: sel ? sel.value : ''});
+      b.disabled = false;
+      if (!r.ok) { toast(r.data.error || '无法开始下载', 'err'); return; }
+      t.source_pref = sel ? sel.value : '';
+      toast('已加入下载队列', 'ok');
+      pollProgress();
+    };
+  });
+}
+
+async function selectPage(selected) {
+  const ids = curItems.map(t => t.track_id).filter(Boolean);
+  if (!ids.length) { toast('本页曲目还没同步进库，请先「加入同步」', 'err'); return; }
+  const r = await jsonReq('/api/tracks/select', 'POST', {ids, selected});
+  if (!r.ok) { toast(r.data.error || '操作失败', 'err'); return; }
+  document.querySelectorAll('.sel').forEach(cb => { cb.checked = selected; });
+  curItems.forEach(t => { t.selected = selected; });
+  toast(`本页 ${r.data.updated} 首已${selected ? '勾选' : '取消勾选'}`, 'ok');
+}
+
+/** soft=true：静默刷新（不清空列表、不闪一下），用于索引跑完后的自动刷新 */
+async function load(soft) {
+  const box = document.getElementById('tracks');
+  if (soft !== true) {
+    box.innerHTML = '<div class="empty"><div class="big">⏳</div>正在加载歌曲…</div>';
+  }
+  // 只有「真正打开页面」的那一次带 refresh=1（触发云盘重索引）；
+  // 自动刷新 / 翻页 / 筛选 一律 refresh=0 —— 否则会变成「刷新又触发重索引」的死循环
+  const r = await jsonReq(`/api/playlists/${PID}/tracks?page=${ST.page}&size=${ST.size}` +
+    `&q=${encodeURIComponent(ST.q)}&local=${ST.local}&cloud=${ST.cloud}` +
+    `&refresh=${NEED_REFRESH}`);
+  NEED_REFRESH = 0;
+  if (!r.ok) {
+    if (soft === true) return;
+    box.innerHTML = `<div class="empty"><div class="big">⚠️</div>${esc(r.data.error || '加载失败')}</div>`;
+    return;
+  }
+  ST.page = r.data.page; ST.size = r.data.size;
+  render(r.data);
+}
+
+/** 单独补一个歌单：先只算计划（dry），确认后再真排队下载/补传 */
+async function fillPlaylist(dryOnly) {
+  const b = document.getElementById('btn-fill');
+  b.disabled = true;
+  const p = await jsonReq(`/api/playlists/${PID}/fill`, 'POST', {dry: dryOnly});
+  b.disabled = false;
+  if (!p.ok) { toast(p.data.error || '扫描失败', 'err'); return null; }
+  const d = p.data;
+  if (dryOnly) {
+    if (!d.download && !d.upload) { toast('这个歌单已经补齐：云盘里都有', 'ok'); return null; }
+    const more = (n) => (n > 20 ? ' …' : '');
+    let msg = `《${d.name}》共 ${d.total} 首（已在云盘 ${d.in_cloud} 首）\n`
+      + `需要下载 ${d.download} 首、需要补传云盘 ${d.upload} 首`;
+    if (d.download_titles.length) msg += `\n\n要下载：${d.download_titles.join('、')}${more(d.download)}`;
+    if (d.upload_titles.length) msg += `\n要补传：${d.upload_titles.join('、')}${more(d.upload)}`;
+    msg += '\n\n现在按这个清单补齐吗？（下载完按「下载后自动上传云盘」开关处理）';
+    if (!confirm(msg)) return null;
+    return fillPlaylist(false);
+  }
+  const left = d.left ? `（还有 ${d.left} 首，点一次补一批）` : '';
+  toast(`已排队：下载 ${d.download} 首 / 补传云盘 ${d.upload} 首${left}`, 'ok');
+  if (d.download || d.upload) pollProgress();
+  setTimeout(() => load(true), 2500);
+  return d;
+}
+document.getElementById('btn-fill').onclick = () => fillPlaylist(true);
+
+// 刷新歌单曲目（不用切页面再进来）：顺便让后端重索引一遍云盘，索引好了列表会自动再刷一次
+document.getElementById('btn-refresh').onclick = () => {
+  NEED_REFRESH = 1;
+  ciReloaded = false;
+  toast('正在刷新歌单曲目（含云盘索引，约几十秒）…', 'ok');
+  load(true);
+};
+
+document.getElementById('btn-sync').onclick = async () => {
+  const r = await jsonReq('/api/playlists', 'POST', {id: PID});
+  if (!r.ok) { toast(r.data.error || '操作失败', 'err'); return; }
+  toast('已加入同步，正在拉取…', 'ok');
+  pollProgress();
+};
+async function selectWhole(selected) {
+  const r = await jsonReq(`/api/playlists/${PID}/select`, 'POST', {selected});
+  if (!r.ok) { toast(r.data.error || '操作失败', 'err'); return; }
+  const {updated, total} = r.data;
+  const rest = total - updated;
+  toast(`已${selected ? '勾选' : '取消勾选'}本歌单 ${updated} 首` +
+        (rest > 0 ? `（另有 ${rest} 首还没同步进库）` : ''), 'ok');
+  load();
+}
+document.getElementById('btn-selpage').onclick = () => selectPage(true);
+document.getElementById('btn-unselpage').onclick = () => selectPage(false);
+document.getElementById('btn-selall').onclick = () => selectWhole(true);
+document.getElementById('btn-unselall').onclick = () => selectWhole(false);
+document.getElementById('btn-dlsel').onclick = async () => {
+  const r = await jsonReq('/api/tracks/download-selected', 'POST');
+  if (!r.ok) { toast(r.data.error || '没有可下载的曲目', 'err'); return; }
+  toast(`已加入下载队列：${r.data.added} 首`, 'ok');
+  pollProgress();
+};
+
+function pollProgress() {
+  const bar = document.getElementById('bar');
+  const txt = document.getElementById('progress');
+  bar.style.display = ''; txt.style.display = '';
+  clearInterval(window._t);
+  window._t = setInterval(async () => {
+    try {
+      const s = await fetch('/api/status').then(r => r.json());
+      const q = (s.queues && s.queues.download) || {};
+      if (q.busy) {
+        txt.textContent = `下载中：进行 ${q.downloading} · 排队 ${q.queued} · 完成 ${q.done} · 失败 ${q.failed}`;
+        const total = q.done + q.failed + q.downloading + q.queued;
+        bar.classList.toggle('indet', !total);
+        bar.querySelector('i').style.width = total ? Math.round((q.done + q.failed) * 100 / total) + '%' : 35;
+      } else {
+        clearInterval(window._t);
+        txt.textContent = '';
+        bar.style.display = 'none';
+        const last = s.last || {};
+        if (last.kind === 'sync' && last.ok) {
+          toast(`歌单已同步，共 ${(last.summary && last.summary.tracks) || 0} 首`, 'ok');
+        } else if (q.done || q.failed) {
+          toast(`下载结束：成功 ${q.done} 首，失败 ${q.failed} 首`, q.failed ? 'err' : 'ok');
+        }
+        load();
+      }
+    } catch (e) { /* 忽略 */ }
+  }, 1500);
+}
+
+fetch('/api/status').then(r => r.json()).then(s => {
+  const q = (s.queues && s.queues.download) || {};
+  if (q.busy || s.running) pollProgress();
+});
+
+// 筛选片：本地 / 云盘 两组，点一下只看那一类（组间叠加）
+bindChips('chips', ST, load);
+
+// 搜索框：输入 400ms 后自动搜（回到第 1 页）
+(function () {
+  const box = document.getElementById('qsearch');
+  if (!box) return;
+  let timer = null;
+  box.addEventListener('input', () => {
+    clearTimeout(timer);
+    timer = setTimeout(() => {
+      ST.q = box.value.trim();
+      ST.page = 1;
+      load();
+    }, 400);
+  });
+})();
+load();
+</script>
+{% endblock %}

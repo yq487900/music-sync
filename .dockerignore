@@ -1,0 +1,5 @@
+.git
+.env
+music
+__pycache__
+*.pyc

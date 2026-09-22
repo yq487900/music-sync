@@ -1,77 +1,210 @@
+"""定时任务与后台任务运行器。"""
+from __future__ import annotations
+
+import asyncio
+import datetime
+from typing import Any, Callable, Dict, Optional
+
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
-from app.config import config as cfg_mod
-from app.sync.netease import NeteaseSync
-from app.db.models import SessionLocal, Track
-from app.sources.luoshe import LuosheSource
-from app.utils.hash import compute_hashes, get_duration
-from pathlib import Path
-import asyncio, os
+
+import app.config as cfgmod
 
 scheduler = AsyncIOScheduler()
 
-async def sync_all():
-    cfg = cfg_mod.load()
-    for platform, info in cfg.get("platforms", {}).items():
-        cookie = info.get("cookie", "")
-        if not cookie:
-            continue
-        if platform == "netease":
-            user_id = info.get("user_id", "")
-            if not user_id:
-                continue
-            ns = NeteaseSync(cookie)
-            playlists = await ns.get_user_playlists(user_id)
-            db = SessionLocal()
-            for pl in playlists:
-                pl_id = str(pl.get("id"))
-                existing = db.query(Track).filter_by(platform="netease", platform_track_id=pl_id).first()
-                if not existing:
-                    tracks = await ns.get_playlist_tracks(pl_id)
-                    for t in tracks:
-                        tr = Track(
-                            platform="netease",
-                            platform_track_id=str(t.get("id")),
-                            title=t.get("name"),
-                            artist=",".join([a.get("name") for a in t.get("artists", [])]),
-                            duration=t.get("duration",0)/1000,
-                            metadata=t
-                        )
-                        db.add(tr)
-            db.commit()
-            db.close()
+# 批量任务运行状态（网页轮询用）；单曲的进度看 queues
+RUN: Dict[str, Any] = {
+    "running": False, "kind": "", "stage": "", "detail": "",
+    "done": 0, "total": 0, "recent": [], "last": {}, "started": "", "finished": "",
+}
 
-async def download_pending():
-    cfg = cfg_mod.load()
-    db = SessionLocal()
-    tracks = db.query(Track).filter_by(downloaded=False).all()
-    source = LuosheSource()
-    for tr in tracks:
-        dest_dir = Path(cfg["download_dir"])
-        dest_dir.mkdir(parents=True, exist_ok=True)
-        file_path = dest_dir / f"{tr.artist} - {tr.title}.mp3"
-        # check local duplicate
-        if file_path.exists():
-            md5, sha = compute_hashes(file_path)
-            dur = get_duration(file_path)
-            if abs(dur - tr.duration) < 2:
-                tr.downloaded = True
-                db.commit()
-                continue
-        results = await source.search(tr.title, tr.artist)
-        if results:
-            ok = await source.download(results[0], str(file_path))
-            if ok:
-                tr.downloaded = True
-                db.commit()
-    db.close()
 
-def start_scheduler():
-    cfg = cfg_mod.load()
-    sch = cfg.get("scheduler", {})
+def _now() -> str:
+    return datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+
+def status() -> Dict[str, Any]:
+    """批量任务状态 + 两个队列的实时快照"""
+    from app import runner
+    data = dict(RUN)
+    try:
+        data["queues"] = runner.snapshot()
+    except Exception:  # noqa: BLE001
+        data["queues"] = {}
+    return data
+
+
+def _progress(stage: str, detail: str, done: Optional[int] = None, total: Optional[int] = None) -> None:
+    RUN["stage"] = stage
+    RUN["detail"] = detail
+    if done is not None:
+        RUN["done"] = done
+    if total is not None:
+        RUN["total"] = total
+
+
+async def _guard(kind: str, fn: Callable[[], Any]) -> None:
+    if RUN["running"]:
+        return
+    RUN.update(running=True, kind=kind, stage="准备中", detail="", done=0, total=0,
+               recent=[], started=_now(), finished="")
+    try:
+        summary = await fn()
+        RUN["last"] = {"kind": kind, "ok": True, "summary": summary, "finished": _now()}
+        print(f"[{kind}] 完成: {summary}", flush=True)
+    except Exception as e:  # noqa: BLE001
+        RUN["last"] = {"kind": kind, "ok": False, "error": f"{type(e).__name__}: {e}",
+                       "finished": _now()}
+        print(f"[{kind}] 异常: {type(e).__name__}: {e}", flush=True)
+    finally:
+        RUN.update(running=False, stage="", detail="", finished=_now())
+
+
+def _fetch_coro(cfg: Dict[str, Any]):
+    from app.sync.netease import fetch
+    return fetch(cfg, _progress)
+
+
+def _download_coro(cfg: Dict[str, Any]):
+    from app.runner import download_all
+    return download_all(cfg, _progress)
+
+
+def _upload_coro(cfg: Dict[str, Any]):
+    from app.runner import upload_all
+    return upload_all(cfg, selected_only=True)
+
+
+_CORO = {"sync": _fetch_coro, "download": _download_coro, "upload": _upload_coro}
+
+
+async def run_sync() -> bool:
+    """拉取歌单曲目（前台等待版，定时任务用）"""
+    if RUN["running"]:
+        return False
+    await _guard("sync", lambda: _fetch_coro(cfgmod.load()))
+    return True
+
+
+async def run_download() -> bool:
+    """下载待办曲目（前台等待版，定时任务用）"""
+    if RUN["running"]:
+        return False
+    await _guard("download", lambda: _download_coro(cfgmod.load()))
+    return True
+
+
+async def run_upload() -> bool:
+    """把本地已下载未上传的曲目补传到云盘（定时任务用）"""
+    if RUN["running"]:
+        return False
+    await _guard("upload", lambda: _upload_coro(cfgmod.load()))
+    return True
+
+
+def start(kind: str, **kwargs: Any) -> bool:
+    """网页按钮用：扔到后台跑，立刻返回"""
+    if kind not in _CORO:
+        return False
+    if RUN["running"]:
+        return False
+    cfg = cfgmod.load()
+    make = _CORO[kind]
+    coro = make(cfg, **kwargs) if kwargs else make(cfg)
+    asyncio.create_task(_guard(kind, lambda: coro))
+    RUN.update(kind=kind, stage="启动中", detail="")
+    return True
+
+
+def reschedule() -> list:
+    """按最新配置重建定时任务，配置页保存后立即生效（无需重启）"""
+    cfg = cfgmod.load()
+    sch = cfg.get("scheduler") or {}
+    cloud = cfg.get("cloud") or {}
+    for job_id in ("auto_sync", "auto_download", "auto_upload"):
+        try:
+            scheduler.remove_job(job_id)
+        except Exception:  # noqa: BLE001
+            pass
+    try:
+        h, m = map(int, str(sch.get("time", "02:00")).split(":"))
+    except (ValueError, TypeError):
+        h, m = 2, 0
     if sch.get("auto_sync"):
-        h,m = map(int, sch.get("time","02:00").split(":"))
-        scheduler.add_job(sync_all, "cron", hour=h, minute=m, id="auto_sync")
+        scheduler.add_job(run_sync, "cron", hour=h, minute=m, id="auto_sync")
     if sch.get("auto_download"):
-        h,m = map(int, sch.get("time","02:00").split(":"))
-        scheduler.add_job(download_pending, "cron", hour=h, minute=m+5, id="auto_download")
-    scheduler.start()
+        scheduler.add_job(run_download, "cron", hour=h, minute=(m + 5) % 60, id="auto_download")
+        if cloud.get("auto_upload"):
+            scheduler.add_job(run_upload, "cron", hour=h, minute=(m + 20) % 60, id="auto_upload")
+    # next_run_time 仅在调度器启动后才有值
+    return [(j.id, str(getattr(j, "next_run_time", None) or "-")) for j in scheduler.get_jobs()]
+
+
+async def refresh_cloud_index() -> None:
+    """刷新云盘索引：歌单页靠它判断「这首歌在不在云盘」
+
+    容器刚起来时同容器里的 ncm-api 还没就绪，第一次会失败 —— 所以失败后退避重试。
+    """
+    from app.cloud_index import index
+    cfg = cfgmod.load()
+    cookie = str(((cfg.get("platforms") or {}).get("netease") or {}).get("cookie") or "")
+    if not cookie:
+        return
+    for attempt in range(3):
+        r = await index.refresh(cookie)
+        print(f"[cloud_index] 第{attempt + 1}次 {r}", flush=True)
+        if r.get("ok"):
+            return
+        await asyncio.sleep(30 * (attempt + 1))
+
+
+async def refresh_playlist_index() -> None:
+    """刷新歌单索引（他所有网易云歌单里的歌曲 id）
+
+    只重拉「变过」的歌单，稳态下几乎不花请求；云盘页用它判断「这首歌在不在歌单里」，
+    歌单监控也用它找新歌。同样带失败退避（容器刚起来时 ncm-api 还没就绪）。
+    """
+    from app.playlist_index import index
+    cfg = cfgmod.load()
+    platform_cfg = (cfg.get("platforms") or {}).get("netease") or {}
+    cookie = str(platform_cfg.get("cookie") or "")
+    uid = str(platform_cfg.get("user_id") or "")
+    if not cookie or not uid:
+        return
+    for attempt in range(3):
+        r = await index.refresh(cookie, uid)
+        print(f"[playlist_index] 第{attempt + 1}次 {r}", flush=True)
+        if r.get("ok"):
+            return
+        await asyncio.sleep(30 * (attempt + 1))
+
+
+async def run_monitor() -> None:
+    """歌单监控：歌单新歌 / 云盘缺歌 → 自动排队下载（开关关着时直接跳过）"""
+    from app.runner import monitor_playlists
+    try:
+        r = await monitor_playlists()
+        if not r.get("skipped"):
+            print(f"[monitor] {r}", flush=True)
+    except Exception as e:  # noqa: BLE001
+        print(f"[monitor] 异常: {type(e).__name__}: {e}", flush=True)
+
+
+def start_scheduler() -> None:
+    from app.runner import apply_config
+    apply_config(cfgmod.load())
+    reschedule()
+    if not scheduler.running:
+        scheduler.start()
+    # 云盘索引：起来 20 秒后拉一次（等 ncm-api 就绪），之后每 10 分钟刷新
+    # （页面只读内存，永远不等它；打开歌单时还会额外强制刷一次）
+    scheduler.add_job(refresh_cloud_index, "interval", minutes=10, id="cloud_index",
+                      replace_existing=True,
+                      next_run_time=datetime.datetime.now() + datetime.timedelta(seconds=20))
+    # 歌单索引（在不在歌单里 / 监控用）：30 分钟一次，只重拉变过的歌单
+    scheduler.add_job(refresh_playlist_index, "interval", minutes=30, id="playlist_index",
+                      replace_existing=True,
+                      next_run_time=datetime.datetime.now() + datetime.timedelta(seconds=35))
+    # 歌单监控：每 10 分钟看一次（开关关着就什么都不做）
+    scheduler.add_job(run_monitor, "interval", minutes=10, id="playlist_monitor",
+                      replace_existing=True,
+                      next_run_time=datetime.datetime.now() + datetime.timedelta(minutes=1))

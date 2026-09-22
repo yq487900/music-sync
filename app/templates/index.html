@@ -1,15 +1,238 @@
-<!DOCTYPE html>
-<html><head><meta charset="utf-8"><title>MusicSync</title></head>
-<body>
-<h1>MusicSync 控制台</h1>
-<ul>
-<li><a href="/config">配置下载目录与源优先级</a></li>
-<li><a href="/login/netease">网易云扫码登录</a></li>
-<li><a href="/login/qq">QQ音乐扫码登录</a></li>
-<li><a href="/playlists">查看已同步歌单</a></li>
-<li><a href="/download">下载任务</a></li>
-</ul>
-<p>当前下载目录: {{ config.download_dir }}</p>
-<form action="/api/sync/netease" method="post"><button>手动同步网易云歌单</button></form>
-<form action="/api/download/pending" method="post"><button>手动下载待办曲目</button></form>
-</body></html>
+{% extends "base.html" %}
+{% block title %}MusicSync · 控制台{% endblock %}
+{% block content %}
+
+<div class="card">
+  <h1>音乐同步控制台</h1>
+  <p class="sub">勾选歌单 → 自动同步曲目 → 按音质优先级下载到本地 → 备份到网易云云盘。</p>
+  <div class="btn-row">
+    <span class="pill" id="pill-svc"><span class="dot-i"></span> 服务运行中</span>
+    <span class="pill" id="pill-ncm"><span class="dot-i"></span> 接口服务检测中…</span>
+    <span class="pill" id="pill-src"><span class="dot-i"></span> 音源沙箱检测中…</span>
+  </div>
+
+  <div class="acct" id="acct" hidden>
+    <img class="ava" id="a-ava" src="" alt="">
+    <div class="a-main">
+      <div class="a-name"><span id="a-name">—</span>
+        <span class="pill" id="a-login"><span class="dot-i"></span>已登录</span>
+      </div>
+      <div class="a-meta" id="a-meta"></div>
+    </div>
+    <div class="a-right" id="a-right"></div>
+  </div>
+
+  <p class="hint" id="login-hint" style="margin-top:12px" hidden>
+    还没登录网易云，<a href="/config#login" style="color:var(--accent-1)">去配置页顶部扫码登录</a>
+  </p>
+</div>
+
+<div class="card">
+  <h2>概览</h2>
+  <p class="sub">歌单 / 本地曲库 / 云盘 / 索引 / 监控的实时状态。</p>
+  <div class="tiles">
+    <div class="tile"><span class="t-k">已勾选歌单</span><span class="t-v" id="s-playlists">—</span>
+      <span class="t-h" id="s-playlists-h"></span></div>
+    <div class="tile"><span class="t-k">曲目总数</span><span class="t-v" id="s-tracks">—</span>
+      <span class="t-h" id="s-tracks-h"></span></div>
+    <div class="tile"><span class="t-k">已下载到本地</span><span class="t-v" id="s-done">—</span>
+      <span class="t-h" id="s-done-h"></span></div>
+    <div class="tile"><span class="t-k">待下载 / 失败</span><span class="t-v" id="s-pending">—</span>
+      <span class="t-h" id="s-failed-h"></span></div>
+
+    <div class="tile"><span class="t-k">云盘歌曲</span><span class="t-v" id="s-cloud">—</span>
+      <span class="t-h" id="s-cloud-h"></span></div>
+    <div class="tile"><span class="t-k">云盘缺封面 / 无信息</span><span class="t-v" id="s-nocover">—</span>
+      <span class="t-h">这些是网易云没认出来的歌，匹配不了</span></div>
+    <div class="tile"><span class="t-k">云盘容量</span><span class="t-v" id="s-csize">—</span>
+      <span class="t-h" id="s-csize-h"></span></div>
+    <div class="tile"><span class="t-k">本地曲库文件</span><span class="t-v" id="s-lib">—</span>
+      <span class="t-h">「整理」页面扫描到的文件数</span></div>
+
+    <div class="tile"><span class="t-k">回收站</span><span class="t-v" id="s-trash">—</span>
+      <span class="t-h" id="s-trash-h"></span></div>
+    <div class="tile"><span class="t-k">歌单监控</span><span class="t-v" id="s-mon">—</span>
+      <span class="t-h" id="s-mon-h"></span></div>
+    <div class="tile wide"><span class="t-k">云盘索引 / 歌单索引</span>
+      <span class="t-v" id="s-idx">—</span>
+      <span class="t-h" id="s-idx-h"></span></div>
+    <div class="tile"><span class="t-k">队列状态</span><span class="t-v" id="s-queue">—</span>
+      <span class="t-h" id="s-queue-h"></span></div>
+  </div>
+</div>
+
+<div class="card">
+  <h2>手动操作</h2>
+  <p class="sub">立即触发一次同步或下载，无需等待定时任务。</p>
+  <div class="btn-row">
+    <button class="btn primary" id="btn-sync"><svg><use href="#ic-refresh"/></svg>立即同步歌单</button>
+    <button class="btn" id="btn-dl"><svg><use href="#ic-down"/></svg>下载勾选的曲目</button>
+    <button class="btn" id="btn-reload"><svg><use href="#ic-refresh"/></svg>刷新本页</button>
+    <a class="btn" href="/download">去下载页管理队列</a>
+  </div>
+  <div class="bar indet" id="bar" style="display:none"><i></i></div>
+  <p class="hint" id="progress" style="display:none"></p>
+</div>
+
+{% endblock %}
+
+{% block script %}
+<script>
+const fmtSize = (n) => {
+  if (!n) return '0 B';
+  const u = ['B', 'KB', 'MB', 'GB', 'TB'];
+  let i = 0, v = Number(n);
+  while (v >= 1024 && i < u.length - 1) { v /= 1024; i += 1; }
+  return (i ? v.toFixed(i >= 3 ? 2 : 1) : String(v)) + ' ' + u[i];
+};
+const fmtAgo = (s) => {
+  if (!s && s !== 0) return '';
+  if (s < 60) return `${Math.round(s)} 秒前`;
+  if (s < 3600) return `${Math.round(s / 60)} 分钟前`;
+  return `${(s / 3600).toFixed(1)} 小时前`;
+};
+const setV = (id, v) => { const el = document.getElementById(id); if (el) el.textContent = v; };
+
+let HOME = {};
+
+async function loadHome() {
+  let d = null;
+  try { d = await (await fetch('/api/home')).json(); } catch (e) { return; }
+  HOME = d;
+  const a = d.account || {};
+  const st = d.stats || {};
+  const cl = d.cloud || {};
+  const mon = d.monitor || {};
+
+  // ── 账号信息
+  if (a.logged_in) {
+    document.getElementById('acct').hidden = false;
+    document.getElementById('login-hint').hidden = true;
+    setV('a-name', a.nickname || '（未取到昵称）');
+    const ava = document.getElementById('a-ava');
+    if (a.avatar) { ava.src = a.avatar; ava.referrerPolicy = 'no-referrer'; } else { ava.hidden = true; }
+    const meta = [];
+    if (a.uid) meta.push(`UID ${a.uid}`);
+    if (a.level) meta.push(`Lv.${a.level}${a.play_count ? ` · 听过 ${a.play_count} 首` : ''}`);
+    if (a.created_playlists || a.sub_playlists) {
+      meta.push(`歌单 ${a.created_playlists || 0} 个（收藏 ${a.sub_playlists || 0} 个）`);
+    }
+    document.getElementById('a-meta').innerHTML = meta.map(x => `<span>${esc(x)}</span>`).join('');
+    const right = [];
+    if (a.vip_level) {
+      const exp = a.vip_expire ? new Date(a.vip_expire) : null;
+      right.push(`<span class="pill"><span class="dot-i"></span>黑胶VIP Lv.${a.vip_level}`
+        + (exp ? ` · ${exp.toISOString().slice(0, 10)} 到期` : '') + '</span>');
+    } else {
+      right.push('<span class="pill warn"><span class="dot-i"></span>未开通会员</span>');
+    }
+    if (a.cloud_max) {
+      right.push(`<span class="pill"><span class="dot-i"></span>云盘 ${fmtSize(a.cloud_size)} / `
+        + `${fmtSize(a.cloud_max)} · ${a.cloud_count || 0} 首</span>`);
+    }
+    document.getElementById('a-right').innerHTML = right.join('');
+  } else {
+    document.getElementById('acct').hidden = true;
+    document.getElementById('login-hint').hidden = false;
+  }
+
+  // ── 概览
+  setV('s-playlists', `${st.playlists_configured || 0} 个`);
+  setV('s-playlists-h', `已同步入库 ${st.synced_playlists || 0} 个歌单`);
+  setV('s-tracks', `${st.tracks || 0} 首`);
+  setV('s-tracks-h', `其中已勾选 ${st.selected || 0} 首`);
+  setV('s-done', `${st.downloaded || 0} 首`);
+  setV('s-done-h', `已上传云盘 ${st.uploaded || 0} 首 · 待上传 ${st.waiting_upload || 0} 首`);
+  setV('s-pending', `${st.pending || 0} / ${st.failed || 0}`);
+  setV('s-failed-h', (st.failed ? '有失败曲目，去下载页看看' : '没有失败曲目'));
+
+  setV('s-cloud', `${cl.total || 0} 首`);
+  setV('s-cloud-h', `其中 ${cl.in_playlist || 0} 首在你歌单里`);
+  setV('s-nocover', `${cl.cover_no || 0} 首`);
+  setV('s-csize', a.cloud_max ? `${Math.round((a.cloud_size || 0) / a.cloud_max * 100)}%` : '—');
+  setV('s-csize-h', a.cloud_max ? `${fmtSize(a.cloud_size)} / ${fmtSize(a.cloud_max)}` : '需要登录后查看');
+  setV('s-lib', `${(d.lib || {}).files || 0} 首`);
+  setV('s-trash', `${(d.trash || {}).count || 0} 首`);
+  setV('s-trash-h', `占用 ${fmtSize((d.trash || {}).size || 0)} · 在「回收站」里处理`);
+
+  setV('s-mon', mon.on ? '已开启' : '已关闭');
+  const lr = mon.last_result || {};
+  setV('s-mon-h', mon.on
+    ? `${mon.mode === 'full' ? '全量补齐模式' : '只监控新歌'} · 上次检查 ${mon.last_run ? String(mon.last_run).slice(5) : '—'}`
+      + (lr.scanned !== undefined ? `（扫 ${lr.scanned} 首 / 下载 ${lr.download || 0} 首）` : '')
+    : '在配置页可以打开');
+
+  const ci = cl.index || {};
+  const pj = (d.playlist_index || {});
+  setV('s-idx', `${ci.count || 0} / ${pj.songs || 0}`);
+  setV('s-idx-h', `云盘索引 ${ci.count ? fmtAgo(ci.age) : '未建好'}`
+    + (ci.refreshing ? '（正在刷新…）' : '')
+    + ` · 歌单索引 ${pj.playlists || 0} 个歌单 ${pj.songs || 0} 首 ${pj.at ? fmtAgo(pj.age) : ''}`);
+
+  const q = d.queues || {};
+  const busy = ['download', 'upload', 'organize'].filter(k => (q[k] || {}).busy);
+  const dn = (q.download || {}), up = (q.upload || {});
+  setV('s-queue', busy.length ? '进行中' : '空闲');
+  setV('s-queue-h', `下载 ${dn.done || 0} 完成 / ${dn.failed || 0} 失败 · 上传 ${up.done || 0} 完成 / ${up.failed || 0} 失败`);
+
+  // ── 顶部状态
+  document.getElementById('pill-ncm').className = 'pill good';
+  document.getElementById('pill-ncm').innerHTML = '<span class="dot-i"></span> 接口服务正常';
+  const src = document.getElementById('pill-src');
+  src.className = d.sources_ready ? 'pill good' : 'pill warn';
+  src.innerHTML = `<span class="dot-i"></span> 音源沙箱${d.sources_ready ? '就绪' : '未就绪'}`;
+  const lg = document.getElementById('pill-login');
+  if (lg) {
+    lg.className = a.logged_in ? 'pill good' : 'pill warn';
+    lg.innerHTML = `<span class="dot-i"></span> 网易云${a.logged_in ? '已登录' : '未登录'}`;
+  }
+}
+
+async function reload() { await loadHome(); toast('已刷新', 'ok'); }
+
+document.getElementById('btn-reload').onclick = reload;
+document.getElementById('btn-sync').onclick = async () => {
+  const r = await jsonReq('/api/sync/netease', 'POST');
+  if (!r.ok) { toast(r.data.error || '无法开始', 'err'); return; }
+  toast('歌单同步已开始', 'ok');
+  pollProgress();
+};
+document.getElementById('btn-dl').onclick = async () => {
+  const r = await jsonReq('/api/tracks/download-selected', 'POST');
+  if (!r.ok) { toast(r.data.error || '没有可下载的曲目', 'err'); return; }
+  toast(`已加入下载队列：${r.data.added} 首`, 'ok');
+  pollProgress();
+};
+
+// 队列进度（有任务时才轮询；只改进度条，不动卡片）
+let qTimer = null;
+async function pollProgress() {
+  const txt = document.getElementById('progress');
+  const bar = document.getElementById('bar');
+  const s = await (await fetch('/api/status')).json();
+  const q = (s.queues && s.queues.download) || {};
+  if (q.busy || s.running) {
+    txt.style.display = '';
+    bar.style.display = '';
+    const total = q.done + q.failed + q.downloading + q.queued;
+    txt.textContent = `下载中：完成 ${q.done || 0} · 失败 ${q.failed || 0} · 排队 ${q.queued || 0}`;
+    bar.classList.toggle('indet', !total);
+    bar.querySelector('i').style.width = total
+      ? Math.round((q.done + q.failed) * 100 / total) + '%' : 35;
+    clearTimeout(qTimer);
+    qTimer = setTimeout(pollProgress, 2000);
+  } else {
+    clearTimeout(qTimer);
+    txt.style.display = 'none';
+    bar.style.display = 'none';
+    loadHome();
+  }
+}
+
+loadHome();
+fetch('/api/status').then(r => r.json()).then(s => {
+  const q = (s.queues && s.queues.download) || {};
+  if (q.busy || s.running) pollProgress();
+});
+</script>
+{% endblock %}

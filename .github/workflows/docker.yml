@@ -13,8 +13,6 @@ permissions:
 jobs:
   build:
     runs-on: ubuntu-latest
-    outputs:
-      image_tags: ${{ steps.meta.outputs.tags }}
     steps:
       - uses: actions/checkout@v4
 
@@ -42,7 +40,13 @@ jobs:
         uses: docker/build-push-action@v5
         with:
           context: .
+          # 目前只构建 amd64（作者自用是 x86 NAS）。需要 arm64 就加到这里，构建时间会明显变长
+          platforms: linux/amd64
           push: true
+          # CI 在 GitHub 上，直接用官方源比国内镜像快
+          build-args: |
+            PIP_INDEX=https://pypi.org/simple
+            NPM_REGISTRY=https://registry.npmjs.org
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha
@@ -59,7 +63,40 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ github.ref_name }}
-          name: Release ${{ github.ref_name }}
-          generate_release_notes: true
+          name: MusicSync ${{ github.ref_name }}
+          body: |
+            ## MusicSync ${{ github.ref_name }} —— 首个版本
+
+            网易云歌单同步工具：勾选歌单 → 自动下载（网易云优先、第三方音源兜底）→ 写标签 / 封面 / 歌词 / NFO
+            → 整理曲库（可手动纠错）→ 备份到网易云云盘。
+
+            ### 怎么用
+
+            ```bash
+            git clone https://github.com/${{ github.repository }}.git && cd music-sync
+            cp .env.example .env      # 改一下 MUSIC_DIR（你的音乐目录）
+            docker compose -f docker-compose.ghcr.yml up -d
+            ```
+
+            访问 `http://<你的IP>:13570`，首次在「配置」页顶部扫码登录网易云。
+
+            镜像：`ghcr.io/${{ github.repository }}:${{ github.ref_name }}`（同时打 `latest`）
+
+            ### 这个版本有什么
+
+            - **歌单同步 / 下载队列**：音质优先级、第三方音源兜底、试听片段拦截、单曲指定音源
+            - **整理**：曲库体检、批量刮削（网易云/QQ/酷我/酷狗/咪咕）、逐首编辑、按歌曲 ID 手动匹配
+            - **回收站**：删除先移入回收站（没真删），可单独/批量恢复或彻底清空
+            - **云盘**：常驻索引驱动的列表与状态图标（在本地 / 在云盘 / 在不在歌单）、逐首纠错、
+              上传后自动校准元数据、**点「不在歌单」图标直接加进歌单**、单个歌单「扫描补齐」
+            - **歌单监控**：歌单里加了新歌自动下载（可选「全量扫描补齐后再监控」），下载完按开关自动传云盘
+            - **首页**：账号信息（昵称 / 等级 / 会员 / 云盘占用）+ 12 项状态卡片
+            - **自测**：内置 110 项自测 + 接口级脚本（见 README「自测」）
+
+            ### 注意
+
+            - 面板**没有任何登录鉴权**，只建议在局域网内使用，不要直接暴露到公网
+            - 只做**你自己已授权内容**的下载、整理与备份，请遵守当地版权法规与网易云服务条款
+            - 第三方组件与致谢见仓库 `NOTICE`
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

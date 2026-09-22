@@ -7,34 +7,36 @@ if [ ! -f "$CONFIG" ]; then
     cat >"$CONFIG" <<'EOF'
 {
   "download_dir": "/music",
-  "need_scrape_dir": "/music/need_scrape",
-  "priority_order": ["netease","qq","luoshe"],
   "platforms": {
     "netease": {"cookie": "", "user_id": ""},
-    "qq":      {"cookie": "", "user_id": ""},
-    "kugou":   {"cookie": ""},
-    "kuwo":    {"cookie": ""},
-    "gis":     {"cookie": ""}
+    "qq":      {"cookie": "", "user_id": ""}
   },
   "scheduler": {"auto_sync": false, "auto_download": false, "time": "02:00"},
-  "domain": "_",
-  "ssl_email": "",
-  "timezone": "Asia/Shanghai",
-  "app_port": 13570
+  "playlists": [],
+  "library": {"layout": "album", "naming": ""},
+  "quality": {"chain": ["jymaster","hires","lossless","exhigh","standard"], "upgrade_existing": true},
+  "lyrics": {"lrc": true, "embed": true},
+  "nfo": true,
+  "limits": {"download_concurrency": 3, "api_delay": 0.35, "max_per_run": 0,
+             "fail_backoff": 3, "backoff_hours": 24},
+  "music_sources": []
 }
 EOF
 fi
 
-APP_PORT=$(jq -r '.app_port // 13570' "$CONFIG")
+TZ_NAME=$(jq -r '.timezone // "Asia/Shanghai"' "$CONFIG" 2>/dev/null || echo "Asia/Shanghai")
+if [ -f "/usr/share/zoneinfo/$TZ_NAME" ]; then
+    ln -sf "/usr/share/zoneinfo/$TZ_NAME" /etc/localtime
+    echo "$TZ_NAME" > /etc/timezone
+fi
 
-TZ=$(jq -r '.timezone // "Asia/Shanghai"' "$CONFIG")
-ln -sf "/usr/share/zoneinfo/$TZ" /etc/localtime
-echo "$TZ" > /etc/timezone
+mkdir -p /data/tmp
 
 python - <<'PY'
 from app.db.models import Base, engine
 Base.metadata.create_all(engine)
-print("DB initialized")
+print("DB initialized", flush=True)
 PY
 
-exec uvicorn app.main:app --host 0.0.0.0 --port "$APP_PORT"
+# 三个进程（网易云接口服务 / 音源沙箱 / Web+同步引擎）由 supervisor 统一托管
+exec supervisord -c /app/supervisord.conf

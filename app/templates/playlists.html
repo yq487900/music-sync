@@ -1,0 +1,159 @@
+{% extends "base.html" %}
+{% block title %}MusicSync · 歌单{% endblock %}
+{% block content %}
+
+<div class="card">
+  <h1>我的歌单</h1>
+  <p class="sub">勾选左侧方框加入同步；点歌单可以查看里面的歌曲。</p>
+  <div class="btn-row">
+    <button class="btn primary" id="btn-sync"><svg><use href="#ic-refresh"/></svg>立即同步歌单</button>
+    <button class="btn" id="btn-reload">刷新列表</button>
+  </div>
+  <div class="bar indet" id="bar" style="display:none"><i></i></div>
+  <p class="hint" id="progress" style="display:none"></p>
+</div>
+
+<div class="card">
+  <h2>账号歌单</h2>
+  <div id="list"><div class="empty"><div class="big">⏳</div>正在加载…</div></div>
+  <div class="pager" id="pager" style="display:none"></div>
+
+  <details class="adv">
+    <summary>高级：手动按 ID 添加歌单</summary>
+    <div class="adv-body">
+      <p class="hint mt0" style="margin-bottom:10px">
+        歌单页网址里的数字即 ID，例如 <span class="mono">music.163.com/#/playlist?id=123456</span> 中的 123456。
+      </p>
+      <div class="field"><input type="text" id="pid" placeholder="歌单 ID"></div>
+      <div class="field"><input type="text" id="pname" placeholder="备注名（可留空）"></div>
+      <button class="btn" id="btn-add">添加并同步</button>
+    </div>
+  </details>
+</div>
+
+{% endblock %}
+
+{% block script %}
+<script>
+const state = {page: 1, size: 10};
+
+function coverHtml(url, cls) {
+  return url
+    ? `<img class="cov" src="${esc(url)}" alt="" loading="lazy">`
+    : phBox('ic-note');
+}
+
+function render(d) {
+  const box = document.getElementById('list');
+  const pager = document.getElementById('pager');
+  if (!d.items.length) {
+    box.innerHTML = '<div class="empty"><div class="big">📭</div>这个账号还没有歌单</div>';
+    pager.style.display = 'none';
+    return;
+  }
+  box.innerHTML = d.items.map(p => `
+    <div class="pick ${p.configured ? 'on' : ''}" data-id="${p.id}" data-name="${encodeURIComponent(p.name)}">
+      <span class="box" title="加入/取消同步">✓</span>
+      ${coverHtml(p.cover)}
+      <span class="info">
+        <strong>${esc(p.name)}</strong>
+        <span>${p.total} 首${p.configured ? ' · 已勾选同步' : ''}</span>
+      </span>
+      <span class="go">›</span>
+    </div>`).join('');
+
+  box.querySelectorAll('.pick').forEach(el => {
+    const id = el.dataset.id;
+    el.querySelector('.box').onclick = (ev) => {
+      ev.stopPropagation();
+      toggle(el, id, decodeURIComponent(el.dataset.name));
+    };
+    el.onclick = () => { location.href = '/playlists/' + id; };
+  });
+
+  pager.style.display = '';
+  renderPager(pager, {
+    page: d.page, pages: d.pages, total: d.total, size: d.size,
+    unit: '个歌单', sizes: [10, 20, 50],
+    onGo: (page, size) => { state.page = page; state.size = size; load(); }
+  });
+}
+
+async function toggle(el, id, name) {
+  const on = el.classList.contains('on');
+  const r = await jsonReq(on ? '/api/playlists/' + id : '/api/playlists',
+    on ? 'DELETE' : 'POST', on ? undefined : {id: Number(id), name});
+  if (!r.ok) { toast(r.data.error || '操作失败', 'err'); return; }
+  el.classList.toggle('on', !on);
+  const sub = el.querySelector('.info span');
+  sub.textContent = sub.textContent.replace(' · 已勾选同步', '') + (on ? '' : ' · 已勾选同步');
+  toast(on ? '已取消同步' : '已加入同步，正在拉取歌单…', 'ok');
+  if (!on) pollProgress();
+}
+
+async function load() {
+  const box = document.getElementById('list');
+  box.innerHTML = '<div class="empty"><div class="big">⏳</div>正在加载…</div>';
+  const r = await jsonReq(`/api/account/playlists?page=${state.page}&size=${state.size}`);
+  if (!r.ok) {
+    box.innerHTML = `<div class="empty"><div class="big">🔑</div>${esc(r.data.error || '加载失败')}
+      <br><span class="hint"><a href="/login/netease" style="color:var(--accent-1)">去扫码登录</a></span></div>`;
+    document.getElementById('pager').style.display = 'none';
+    return;
+  }
+  state.page = r.data.page; state.size = r.data.size;
+  render(r.data);
+}
+
+async function pollProgress() {
+  const bar = document.getElementById('bar');
+  const txt = document.getElementById('progress');
+  bar.style.display = ''; txt.style.display = '';
+  clearInterval(window._t);
+  window._t = setInterval(async () => {
+    try {
+      const s = await fetch('/api/status').then(r => r.json());
+      if (s.running) {
+        txt.textContent = `正在${s.stage || '处理'}：${s.detail || ''}` +
+          (s.total ? `（${s.done}/${s.total}）` : '');
+        bar.classList.toggle('indet', !s.total);
+        bar.querySelector('i').style.width = (s.total ? Math.round(s.done / s.total * 100) : 35) + '%';
+      } else {
+        clearInterval(window._t);
+        bar.style.display = 'none';
+        const last = s.last || {};
+        if (last.kind === 'sync' && last.ok) {
+          const n = (last.summary && last.summary.tracks) || 0;
+          txt.textContent = `同步完成，共 ${n} 首`;
+          toast(`歌单已同步，共 ${n} 首`, 'ok');
+        } else { txt.textContent = ''; }
+        load();
+      }
+    } catch (err) { /* 忽略 */ }
+  }, 1500);
+}
+
+document.getElementById('btn-sync').onclick = async (e) => {
+  e.target.disabled = true;
+  const r = await jsonReq('/api/sync/netease', 'POST');
+  if (!r.ok) toast(r.data.error || '无法开始', 'err');
+  else { toast('同步已开始', 'ok'); pollProgress(); }
+  setTimeout(() => e.target.disabled = false, 2000);
+};
+document.getElementById('btn-reload').onclick = () => { load(); toast('正在刷新歌单列表…', 'ok'); };
+document.getElementById('btn-add').onclick = async () => {
+  const id = document.getElementById('pid').value.trim();
+  const name = document.getElementById('pname').value.trim();
+  if (!id) { toast('请填写歌单 ID', 'err'); return; }
+  const r = await jsonReq('/api/playlists', 'POST', {id: Number(id), name});
+  if (!r.ok) { toast(r.data.error || '添加失败', 'err'); return; }
+  toast('已添加，正在同步…', 'ok');
+  document.getElementById('pid').value = '';
+  document.getElementById('pname').value = '';
+  pollProgress();
+};
+
+fetch('/api/status').then(r => r.json()).then(s => { if (s.running) pollProgress(); });
+load();
+</script>
+{% endblock %}

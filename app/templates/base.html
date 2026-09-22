@@ -1,0 +1,323 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{% block title %}MusicSync{% endblock %}</title>
+<link rel="stylesheet" href="/static/style.css?v=29">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🎵</text></svg>">
+</head>
+<body>
+<div class="bg"><span class="blob a"></span><span class="blob b"></span><span class="blob c"></span></div>
+
+<div class="shell">
+  <aside class="sidebar">
+    <div class="brand">
+      <span class="dot"></span>
+      <span>MusicSync<small>音乐同步控制台</small></span>
+    </div>
+    <nav class="nav">
+      <a href="/" class="{{ 'active' if active == 'home' }}">
+        <span class="i"><svg viewBox="0 0 24 24"><path d="M3 10.6 12 3l9 7.6"/><path d="M5.6 9.6V20h12.8V9.6"/></svg></span>
+        <span>首页</span>
+      </a>
+      <a href="/playlists" class="{{ 'active' if active == 'playlists' }}">
+        <span class="i"><svg viewBox="0 0 24 24"><path d="M3.5 6h10.5M3.5 12h10.5M3.5 18h6.5"/><path d="M18.5 15.2V6.6l3-0.9v8.6"/><circle cx="16.6" cy="15.8" r="1.9"/></svg></span>
+        <span>歌单</span>
+      </a>
+      <a href="/download" class="{{ 'active' if active == 'download' }}">
+        <span class="i"><svg viewBox="0 0 24 24"><path d="M12 3.5v11.5"/><path d="M7.2 10.8 12 15.6l4.8-4.8"/><path d="M4.5 20h15"/></svg></span>
+        <span>下载</span>
+      </a>
+      <a href="/organize" class="{{ 'active' if active == 'organize' }}">
+        <span class="i"><svg viewBox="0 0 24 24"><path d="M12 3.6 13.6 8 18 9.6 13.6 11.2 12 15.6 10.4 11.2 6 9.6 10.4 8Z"/><path d="M18.4 15.2l.7 2 2 .7-2 .7-.7 2-.7-2-2-.7 2-.7Z"/></svg></span>
+        <span>整理</span>
+      </a>
+      <a href="/trash" class="{{ 'active' if active == 'trash' }}">
+        <span class="i"><svg viewBox="0 0 24 24"><path d="M4 7.2h16"/><path d="M9.6 7.2V4.9h4.8v2.3"/><path d="M6.3 7.2l1 12.2h9.4l1-12.2"/><path d="M10.2 11v5.4M13.8 11v5.4"/></svg></span>
+        <span>回收站</span>
+      </a>
+      <a href="/cloud" class="{{ 'active' if active == 'cloud' }}">
+        <span class="i"><svg viewBox="0 0 24 24"><path d="M6.8 18.4a3.6 3.6 0 0 1 .4-7.1 5 5 0 0 1 9.5-.8 4 4 0 0 1-.6 7.9H6.8Z"/></svg></span>
+        <span>云盘</span>
+      </a>
+      <a href="/config" class="{{ 'active' if active == 'config' }}">
+        <span class="i"><svg viewBox="0 0 24 24"><path d="M3.5 7h9M18 7h2.5M3.5 17h3M11.5 17h9"/><circle cx="15.2" cy="7" r="2.2"/><circle cx="9" cy="17" r="2.2"/></svg></span>
+        <span>配置</span>
+      </a>
+    </nav>
+  </aside>
+
+  <main class="main">
+    {% block content %}{% endblock %}
+    <p class="foot">MusicSync · 网易云歌单同步 · 本地下载 · 云盘备份</p>
+  </main>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<!-- 图标符号库：按钮里用 <svg><use href="#ic-xxx"/></svg> 引用，避免依赖 emoji 字体 -->
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+  <symbol id="ic-refresh" viewBox="0 0 24 24">
+    <path d="M20 12a8 8 0 1 1-2.3-5.6"/><path d="M20.3 4.4v5.4h-5.4"/>
+  </symbol>
+  <symbol id="ic-down" viewBox="0 0 24 24">
+    <path d="M12 4v11"/><path d="M7.5 10.5 12 15l4.5-4.5"/><path d="M5 19.5h14"/>
+  </symbol>
+  <symbol id="ic-up" viewBox="0 0 24 24">
+    <path d="M12 20V9"/><path d="M7.5 13.5 12 9l4.5 4.5"/><path d="M5 4.5h14"/>
+  </symbol>
+  <symbol id="ic-plus" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></symbol>
+  <symbol id="ic-check" viewBox="0 0 24 24"><path d="M5 12.5 10 17.5 19 7"/></symbol>
+  <symbol id="ic-spark" viewBox="0 0 24 24">
+    <path d="M11 3.5 12.5 8 17 9.5 12.5 11 11 15.5 9.5 11 5 9.5 9.5 8Z"/>
+    <path d="M18 15l.8 2.2L21 18l-2.2.8L18 21l-.8-2.2L15 18l2.2-.8Z"/>
+  </symbol>
+  <symbol id="ic-edit" viewBox="0 0 24 24">
+    <path d="M4.5 19.5h4L19 9a2.1 2.1 0 0 0-3-3L5.5 16.5Z"/><path d="M14.5 7 17 9.5"/>
+  </symbol>
+  <symbol id="ic-trash" viewBox="0 0 24 24">
+    <path d="M5 7h14"/><path d="M9.5 7V5h5v2"/><path d="M6.5 7l.8 12h9.4l.8-12"/><path d="M10.5 10.5v5M13.5 10.5v5"/>
+  </symbol>
+  <symbol id="ic-search" viewBox="0 0 24 24">
+    <circle cx="10.8" cy="10.8" r="6.3"/><path d="M15.5 15.5 20 20"/>
+  </symbol>
+
+  <!-- 云盘状态小云朵：云朵本体用 currentColor（由外面的 .ci-xxx 决定颜色），
+       中间那个记号颜色写死在符号里（<use> 引用进来的内容没法用外部 CSS 上色） -->
+  <symbol id="ic-cloud" viewBox="0 0 24 24">
+    <path fill="currentColor" d="M6.8 18.6h9.9a4 4 0 0 0 .3-8 5.5 5.5 0 0 0-10.5-1.1A4.1 4.1 0 0 0 6.8 18.6Z"/>
+  </symbol>
+  <symbol id="ic-cloud-check" viewBox="0 0 24 24">
+    <path fill="currentColor" d="M6.8 18.6h9.9a4 4 0 0 0 .3-8 5.5 5.5 0 0 0-10.5-1.1A4.1 4.1 0 0 0 6.8 18.6Z"/>
+    <path fill="none" stroke="#15803d" stroke-width="2.6" stroke-linecap="round"
+          stroke-linejoin="round" d="M9.7 14.5l1.9 1.9 3.2-3.8"/>
+  </symbol>
+  <symbol id="ic-cloud-alert" viewBox="0 0 24 24">
+    <path fill="currentColor" d="M6.8 18.6h9.9a4 4 0 0 0 .3-8 5.5 5.5 0 0 0-10.5-1.1A4.1 4.1 0 0 0 6.8 18.6Z"/>
+    <path fill="none" stroke="#fff" stroke-width="2.6" stroke-linecap="round"
+          stroke-linejoin="round" d="M12 11.7v3.4M12 17.5h.01"/>
+  </symbol>
+
+  <!-- 无封面时的占位小音符 -->
+  <symbol id="ic-note" viewBox="0 0 24 24">
+    <path fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" d="M9.4 17.4V6.3l9.2-2v11.1"/>
+    <circle cx="7.1" cy="17.7" r="2.3" fill="currentColor"/>
+    <circle cx="16.3" cy="15.6" r="2.3" fill="currentColor"/>
+  </symbol>
+  <!-- 网易云数据库里没有这首歌（所以云盘里也没封面）：禁止符号 -->
+  <symbol id="ic-no-cover" viewBox="0 0 24 24">
+    <circle cx="12" cy="12" r="8.1" fill="none" stroke="currentColor" stroke-width="1.9"/>
+    <path fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" d="M6.3 17.7 17.7 6.3"/>
+  </symbol>
+  <!-- 警告（下载/处理失败） -->
+  <symbol id="ic-warn" viewBox="0 0 24 24">
+    <path fill="none" stroke="currentColor" stroke-width="1.9" stroke-linejoin="round"
+          d="M12 4.3 21 19.4H3z"/>
+    <path fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" d="M12 9.6v3.9M12 16.4h.01"/>
+  </symbol>
+  <!-- 上传箭头 -->
+  <symbol id="ic-up" viewBox="0 0 24 24">
+    <path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"
+          d="M12 19.5V5.2M5.6 11.4 12 5l6.4 6.4"/>
+  </symbol>
+  <!-- 云盘歌曲是否在歌单里：白=在歌单；红+白感叹号=不在歌单；灰=认不出是哪首 -->
+  <symbol id="ic-list" viewBox="0 0 24 24">
+    <path fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"
+          d="M3.6 6.6h10.8M3.6 11.6h10.8M3.6 16.6h7"/>
+    <path fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"
+          d="M18.7 5.9v9.2"/>
+    <circle cx="16.7" cy="16.4" r="2.1" fill="currentColor"/>
+    <path fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"
+          d="M18.7 6c1.3.2 2.3.7 2.9 1.5"/>
+  </symbol>
+  <symbol id="ic-list-out" viewBox="0 0 24 24">
+    <path fill="none" stroke="#f87171" stroke-width="1.9" stroke-linecap="round"
+          d="M3.6 6.6h10.8M3.6 11.6h10.8M3.6 16.6h7"/>
+    <path fill="none" stroke="#fff" stroke-width="2.5" stroke-linecap="round"
+          d="M18.7 7.2v4.4M18.7 15.4h.01"/>
+  </symbol>
+
+  <!-- 本地状态小软盘：普通 = 已在本地；带红感叹号 = 本地没有（未下载 / 下载失败） -->
+  <symbol id="ic-disk" viewBox="0 0 24 24">
+    <path fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"
+          stroke-linejoin="round" d="M4.5 6.6A2.1 2.1 0 0 1 6.6 4.5h9.2L19.5 8.2v9.2a2.1 2.1 0 0 1-2.1 2.1H6.6a2.1 2.1 0 0 1-2.1-2.1Z"/>
+    <path fill="none" stroke="currentColor" stroke-width="1.9" stroke-linejoin="round"
+          d="M8.4 4.5v4.1h5.4V4.5"/>
+    <path fill="none" stroke="currentColor" stroke-width="1.9" stroke-linejoin="round"
+          d="M8.2 19.5v-4.6h7.6v4.6"/>
+  </symbol>
+  <symbol id="ic-disk-alert" viewBox="0 0 24 24">
+    <path fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"
+          stroke-linejoin="round" d="M4.5 6.6A2.1 2.1 0 0 1 6.6 4.5h9.2L19.5 8.2v9.2a2.1 2.1 0 0 1-2.1 2.1H6.6a2.1 2.1 0 0 1-2.1-2.1Z"/>
+    <path fill="none" stroke="currentColor" stroke-width="1.9" stroke-linejoin="round"
+          d="M8.4 4.5v4.1h5.4V4.5"/>
+    <path fill="none" stroke="#f87171" stroke-width="2.2" stroke-linecap="round"
+          d="M12 14.3v2.5M12 18.4h.01"/>
+  </symbol>
+</svg>
+<script>
+function toast(msg, type) {
+  const t = document.getElementById('toast');
+  t.textContent = msg;
+  t.className = 'toast show' + (type ? ' ' + type : '');
+  clearTimeout(t._timer);
+  t._timer = setTimeout(() => { t.className = 'toast'; }, 2800);
+}
+async function post(url, data) {
+  const res = await fetch(url, {
+    method: 'POST',
+    headers: {'Content-Type': 'application/x-www-form-urlencoded'},
+    body: data ? new URLSearchParams(data).toString() : ''
+  });
+  return res.json();
+}
+async function jsonReq(url, method, body) {
+  const res = await fetch(url, {
+    method: method || 'GET',
+    headers: body ? {'Content-Type': 'application/json'} : undefined,
+    body: body ? JSON.stringify(body) : undefined
+  });
+  let data = {};
+  try { data = await res.json(); } catch (e) { /* 空响应 */ }
+  return {ok: res.ok, status: res.status, data};
+}
+function esc(s) {
+  return String(s == null ? '' : s)
+    .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+}
+/**
+ * 渲染分页控件
+ * opts: {page, pages, total, size, sizes:[], onGo:(page,size)=>void, unit:'首'}
+ */
+function renderPager(el, opts) {
+  const sizes = opts.sizes || [10, 20, 50, 100, 200, 500];
+  const total = opts.total || 0;
+  const from = total ? (opts.page - 1) * opts.size + 1 : 0;
+  const to = Math.min(total, opts.page * opts.size);
+  el.innerHTML = `
+    <div class="info">共 ${total} ${opts.unit || '条'}${total ? `，当前 ${from}–${to}` : ''}</div>
+    <div class="ctrl">
+      <span class="lbl">每页</span>
+      <select class="size">
+        ${sizes.map(s => `<option value="${s}" ${s === opts.size ? 'selected' : ''}>${s}</option>`).join('')}
+      </select>
+      <button class="btn" data-go="first" ${opts.page <= 1 ? 'disabled' : ''}>«</button>
+      <button class="btn" data-go="prev" ${opts.page <= 1 ? 'disabled' : ''}>上一页</button>
+      <span class="pg">${opts.page} / ${opts.pages || 1}</span>
+      <button class="btn" data-go="next" ${opts.page >= (opts.pages || 1) ? 'disabled' : ''}>下一页</button>
+      <button class="btn" data-go="last" ${opts.page >= (opts.pages || 1) ? 'disabled' : ''}>»</button>
+    </div>`;
+  el.querySelector('.size').onchange = (e) => opts.onGo(1, Number(e.target.value));
+  el.querySelectorAll('button[data-go]').forEach(b => {
+    b.onclick = () => {
+      const k = b.dataset.go;
+      const p = k === 'first' ? 1 : k === 'last' ? (opts.pages || 1)
+        : k === 'prev' ? opts.page - 1 : opts.page + 1;
+      if (p >= 1 && p <= (opts.pages || 1) && p !== opts.page) opts.onGo(p, opts.size);
+    };
+  });
+}
+
+/* ---------- 曲目行右侧的状态图标（歌单详情页 / 下载页共用） ---------- */
+let CI = null;                      // 云盘索引状态（页面拿到接口数据后调 setCloudIndex）
+function setCloudIndex(ci) { CI = ci || null; }
+
+function cloudTip() {               // 悬停提示里带上「依据几点几分的数据」
+  if (CI && CI.at) {
+    const t = new Date(CI.at * 1000);
+    const hh = String(t.getHours()).padStart(2, '0');
+    const mm = String(t.getMinutes()).padStart(2, '0');
+    return `（依据 ${hh}:${mm} 的云盘数据）`;
+  }
+  return '';
+}
+
+/** 简单弹窗：openModal(标题, 内容HTML) 返回遮罩元素（点背景/关闭按钮都能关） */
+function openModal(title, bodyHtml) {
+  const back = document.createElement('div');
+  back.className = 'modal-back';
+  back.innerHTML = `<div class="modal">
+      <div class="modal-h"><strong>${esc(title)}</strong>
+        <button class="btn mini" data-m="close">关闭</button></div>
+      <div class="modal-b">${bodyHtml}</div>
+    </div>`;
+  document.body.appendChild(back);
+  back.querySelector('[data-m=close]').onclick = () => back.remove();
+  back.onclick = (e) => { if (e.target === back) back.remove(); };
+  return back;
+}
+
+/** 没有封面时的占位块（内联 SVG，不用 emoji）；cls 默认 cov，歌单头图那里传 cover */
+function phBox(icon, tip, cls) {
+  const c = cls || 'cov';
+  return `<span class="${c} ph"${tip ? ` title="${esc(tip)}"` : ''}>`
+    + `<svg class="ci-ph"><use href="#${icon}"/></svg></span>`;
+}
+
+/** 本地状态：💾 = 已在本地；💾+红感叹号 = 本地没有（悬停看是未下载还是下载失败） */
+function localCell(t) {
+  if (t.local) {
+    return '<svg class="ci-icon ci-disk"><title>已在本地</title><use href="#ic-disk"/></svg>';
+  }
+  if (t.status === 'failed') {
+    return `<svg class="ci-icon ci-disk-alert"><title>下载失败${esc(t.error ? '：' + t.error : '')}</title><use href="#ic-disk-alert"/></svg>`;
+  }
+  return '<svg class="ci-icon ci-disk-alert"><title>还没下载到本地</title><use href="#ic-disk-alert"/></svg>';
+}
+
+/** 云盘状态：白云=在云盘；白云+绿勾=在云盘且本地已有；红云+白感叹号=不在云盘；灰云=未知 */
+function cloudCell(t) {
+  const tip = cloudTip();
+  if (t.in_cloud === true) {
+    return t.local
+      ? `<svg class="ci-icon ci-in"><title>在云盘，本地也有${tip}</title><use href="#ic-cloud-check"/></svg>`
+      : `<svg class="ci-icon ci-in"><title>在云盘（本地还没下载）${tip}</title><use href="#ic-cloud"/></svg>`;
+  }
+  if (t.in_cloud === false) {
+    return `<svg class="ci-icon ci-out"><title>不在云盘${tip}</title><use href="#ic-cloud-alert"/></svg>`;
+  }
+  return '<svg class="ci-icon ci-unknown"><title>云盘数据读取中，稍后自动刷新</title><use href="#ic-cloud"/></svg>';
+}
+
+/** 在不在（网易云）歌单里：白=在；红+白感叹号=不在；灰=认不出是哪首（没法判断） */
+function playlistCell(t) {
+  if (t.in_playlist === true) {
+    return '<svg class="ci-icon ci-list"><title>在你的歌单里</title><use href="#ic-list"/></svg>';
+  }
+  if (t.in_playlist === false) {
+    return '<svg class="ci-icon ci-list ci-clickable" data-addpl="1" role="button">'
+      + '<title>不在你的任何歌单里 —— 点一下可以加到歌单</title>'
+      + '<use href="#ic-list-out"/></svg>';
+  }
+  return '<svg class="ci-icon ci-unknown"><title>认不出这是哪首歌（云盘条目还没匹配到正式曲目），判断不了在不在歌单里</title><use href="#ic-list"/></svg>';
+}
+
+/* ---------- 筛选片 ---------- */
+/** 点筛选片：同组单选，组间叠加。状态存在 state.xxx，值写在片子的 data-v 上 */
+function bindChips(group, state, onChange) {
+  const box = document.getElementById(group);
+  if (!box) return;
+  box.querySelectorAll('.chip').forEach(chip => {
+    chip.onclick = () => {
+      state[chip.dataset.k] = chip.dataset.v;
+      state.page = 1;
+      onChange();
+    };
+  });
+}
+/** 按 counts 刷新筛选片上的数字和选中态 */
+function paintChips(group, state, counts) {
+  const box = document.getElementById(group);
+  if (!box) return;
+  box.querySelectorAll('.chip').forEach(chip => {
+    chip.classList.toggle('on', state[chip.dataset.k] === chip.dataset.v);
+    const n = chip.querySelector('.n');
+    if (n) n.textContent = counts && counts[chip.dataset.n] != null ? counts[chip.dataset.n] : '';
+  });
+}
+</script>
+{% block script %}{% endblock %}
+</body>
+</html>

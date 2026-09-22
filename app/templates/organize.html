@@ -1,0 +1,577 @@
+{% extends "base.html" %}
+{% block title %}MusicSync · 整理{% endblock %}
+{% block content %}
+
+<!-- ===================== 曲库体检 ===================== -->
+<div class="card">
+  <h1>曲库整理</h1>
+  <p class="sub">扫描音乐库里的歌曲，补齐缺失的标签 / 封面 / 歌词，也可以逐首手动改。
+    删除只移入回收站（{{ root }} 同盘的 /data/_trash），可找回。</p>
+  <div class="kv">
+    <div><span>音乐库目录</span><strong class="mono">{{ root }}</strong></div>
+    <div><span>曲目总数</span><strong id="s-total">—</strong></div>
+    <div><span>缺标签</span><strong id="s-tag">—</strong></div>
+    <div><span>缺封面</span><strong id="s-cover">—</strong></div>
+    <div><span>缺歌词</span><strong id="s-lyric">—</strong></div>
+  </div>
+  <div class="btn-row">
+    <button class="btn" id="btn-scan"><svg><use href="#ic-refresh"/></svg>扫描曲库</button>
+    <button class="btn primary" id="btn-backfill"><svg><use href="#ic-spark"/></svg>一键刮削缺的</button>
+    <button class="btn mini" id="btn-qp">全部暂停</button>
+    <button class="btn mini" id="btn-qr">全部继续</button>
+    <button class="btn mini" id="btn-qc">全部取消</button>
+    <button class="btn mini" id="btn-qx">清空已结束</button>
+  </div>
+</div>
+
+<!-- ===================== 刮削队列 ===================== -->
+<div class="card" id="qcard" hidden>
+  <h2>刮削队列 <span class="pill" id="q-state">空闲</span></h2>
+  <div id="queue"></div>
+</div>
+
+<!-- ===================== 曲库曲目 ===================== -->
+<div class="card">
+  <h2>曲库曲目</h2>
+  <div class="field" style="max-width:340px;margin-top:12px">
+    <input id="q" placeholder="搜歌名 / 歌手 / 专辑 / 文件名，回车搜索">
+  </div>
+  <div class="chips" id="chips">
+    <span class="lbl">标签</span>
+    <button class="chip" data-k="tag" data-v="all" data-n="total">全部<span class="n"></span></button>
+    <button class="chip" data-k="tag" data-v="yes" data-n="tag_yes">有<span class="n"></span></button>
+    <button class="chip" data-k="tag" data-v="no" data-n="tag_no">缺<span class="n"></span></button>
+    <span class="sep"></span>
+    <span class="lbl">封面</span>
+    <button class="chip" data-k="cover" data-v="all" data-n="total">全部<span class="n"></span></button>
+    <button class="chip" data-k="cover" data-v="yes" data-n="cover_yes">有<span class="n"></span></button>
+    <button class="chip" data-k="cover" data-v="no" data-n="cover_no">缺<span class="n"></span></button>
+    <span class="sep"></span>
+    <span class="lbl">歌词</span>
+    <button class="chip" data-k="lyric" data-v="all" data-n="total">全部<span class="n"></span></button>
+    <button class="chip" data-k="lyric" data-v="yes" data-n="lyric_yes">有<span class="n"></span></button>
+    <button class="chip" data-k="lyric" data-v="no" data-n="lyric_no">缺<span class="n"></span></button>
+  </div>
+  <div class="btn-row">
+    <button class="btn mini" id="btn-selpage">勾选本页</button>
+    <button class="btn mini" id="btn-unselpage">取消本页</button>
+    <button class="btn mini" id="btn-selall">全部勾选</button>
+    <button class="btn mini" id="btn-unselall">全部取消</button>
+    <button class="btn mini" id="btn-scrapesel"><svg><use href="#ic-spark"/></svg>刮削勾选的</button>
+    <button class="btn mini" id="btn-delsel"><svg><use href="#ic-trash"/></svg>删除勾选的</button>
+  </div>
+  <div id="list"><p class="empty">正在扫描音乐库…</p></div>
+  <div class="pager" id="pager"></div>
+</div>
+{% endblock %}
+
+{% block script %}
+<script>
+const ST = {page: 1, size: 20, q: '', tag: 'all', cover: 'all', lyric: 'all'};
+const SEL = new Set();          // 勾选的文件路径
+let items = [];
+const fmtSize = b => !b ? '' : (b >= 1073741824 ? (b / 1073741824).toFixed(2) + ' GB'
+  : b >= 1048576 ? (b / 1048576).toFixed(1) + ' MB' : Math.round(b / 1024) + ' KB');
+const fmtDur = s => !s ? '' : Math.floor(s / 60) + ':' + String(Math.round(s % 60)).padStart(2, '0');
+const baseName = p => String(p || '').split('/').pop();
+
+function paintAudit(a) {
+  a = a || {};
+  document.getElementById('s-total').textContent = (a.total || 0) + ' 首';
+  document.getElementById('s-tag').textContent = (a.no_title || 0) + ' 首';
+  document.getElementById('s-cover').textContent = (a.no_cover || 0) + ' 首';
+  document.getElementById('s-lyric').textContent = (a.no_lyrics || 0) + ' 首';
+}
+
+/** 三个状态灯：标签 / 封面 / 歌词 */
+function badges(t) {
+  const mk = (ok, label) => `<span class="mk ${ok ? 'ok' : 'no'}" title="${label}：${ok ? '有' : '缺'}">${label}</span>`;
+  return mk(!!t.title && !!t.artist, '标签') + mk(!!t.has_cover, '封面')
+    + mk(!!t.has_lyrics, '歌词') + (t.in_db ? '' : '<span class="mk no" title="不是本工具下载的（手动放进音乐库）">外来</span>');
+}
+
+function rowHtml(t, i) {
+  const cover = t.has_cover
+    ? `<img class="cov" loading="lazy" alt="" src="/api/organize/cover?path=${encodeURIComponent(t.path)}&v=${t.mtime}">`
+    : phBox('ic-note');
+  const sub = [t.artist, t.album, t.duration ? fmtDur(t.duration) : '', fmtSize(t.size)]
+    .filter(Boolean).join(' · ');
+  return `
+  <div class="trk row-click" data-i="${i}">
+    <span class="no"><input type="checkbox" class="sel" ${SEL.has(t.path) ? 'checked' : ''}></span>
+    ${cover}
+    <span class="meta">
+      <strong>${esc(t.title || baseName(t.name))}</strong>
+      <span>${esc(sub || '（无标签信息）')}</span>
+      <span class="fpath mono">${esc(t.name)}</span>
+    </span>
+    <span class="right org">
+      <span class="st">${badges(t)}</span>
+      <button class="btn mini" data-act="edit"><svg><use href="#ic-edit"/></svg>编辑</button>
+      <button class="btn mini" data-act="scrape"><svg><use href="#ic-spark"/></svg>刮削</button>
+      <button class="btn mini" data-act="del"><svg><use href="#ic-trash"/></svg>删除</button>
+    </span>
+    <div class="org-edit" hidden></div>
+  </div>`;
+}
+
+function render() {
+  const box = document.getElementById('list');
+  if (!items.length) {
+    box.innerHTML = '<p class="empty">没有匹配的曲目</p>';
+    return;
+  }
+  box.innerHTML = items.map(rowHtml).join('');
+  box.querySelectorAll('.trk').forEach(bindRow);
+}
+
+function bindRow(row) {
+  const i = Number(row.dataset.i);
+  const t = items[i];
+  const cbx = row.querySelector('.sel');
+  cbx.onchange = () => { cbx.checked ? SEL.add(t.path) : SEL.delete(t.path); };
+  // 点整行 = 切换勾选（右侧按钮与编辑面板不受影响）
+  row.onclick = (e) => {
+    if (e.target.closest('.right, .org-edit, input, select, button, a, textarea, label')) return;
+    cbx.checked = !cbx.checked;
+    cbx.dispatchEvent(new Event('change', { bubbles: true }));
+  };
+  row.querySelector('[data-act=edit]').onclick = () => openEditor(row, t);
+  row.querySelector('[data-act=scrape]').onclick = async (e) => {
+    const b = e.currentTarget;
+    b.disabled = true;
+    const r = await jsonReq('/api/organize/scrape', 'POST', { path: t.path });
+    b.disabled = false;
+    if (!r.ok || !r.data.ok) { toast((r.data && r.data.reason) || r.data.error || '刮削失败', 'err'); return; }
+    const m = r.data.matched || {};
+    toast(`已刮削：${m.name || baseName(t.name)}${r.data.cover ? ' · 封面' : ''}${r.data.lyrics ? ' · 歌词' : ''}`, 'ok');
+    load();
+  };
+  row.querySelector('[data-act=del]').onclick = async (e) => {
+    if (!confirm(`把「${t.title || baseName(t.name)}」移入回收站？\n文件不会立即删除，可在回收站找回。`)) return;
+    const b = e.currentTarget;
+    b.disabled = true;
+    const r = await jsonReq('/api/organize/delete', 'POST', { paths: [t.path] });
+    b.disabled = false;
+    if (!r.ok) { toast(r.data.error || '删除失败', 'err'); return; }
+    SEL.delete(t.path);
+    toast(`已移入回收站：${baseName(t.path)}`, 'ok');
+    load();
+  };
+}
+
+// ---------------------------------------------------------------- 编辑器
+function openEditor(row, t) {
+  const panel = row.querySelector('.org-edit');
+  if (!panel.hidden) { panel.hidden = true; panel.innerHTML = ''; return; }
+  panel.innerHTML = '<p class="hint">正在读取文件信息…</p>';
+  panel.hidden = false;
+  jsonReq('/api/organize/item?path=' + encodeURIComponent(t.path)).then(r => {
+    if (!r.ok) { panel.innerHTML = `<p class="hint">${esc(r.data.error || '读取失败')}</p>`; return; }
+    panel.innerHTML = editHtml(r.data.item);
+    bindEditor(panel, r.data.item);
+  });
+}
+
+function editHtml(it) {
+  const f = (label, id, val, ph) =>
+    `<div class="field"><label>${label}</label><input id="${id}" value="${esc(val)}" placeholder="${ph || ''}"></div>`;
+  return `
+  <div class="org-grid">
+    <div>
+      ${f('歌名', 'e-title', it.title)}
+      ${f('歌手', 'e-artist', it.artist)}
+      ${f('专辑', 'e-album', it.album)}
+      ${f('专辑艺人', 'e-album_artist', it.album_artist)}
+      <div class="org-3">
+        ${f('音轨号', 'e-track', it.track)}
+        ${f('碟号', 'e-disc', it.disc)}
+        ${f('年份', 'e-date', it.date)}
+      </div>
+      <div class="field">
+        <label>歌词（可直接编辑，留空则删除歌词）</label>
+        <textarea id="e-lyrics" rows="8" spellcheck="false">${esc(it.lyrics)}</textarea>
+      </div>
+    </div>
+    <div>
+      <div class="field">
+        <label>封面</label>
+        <div class="cover-box" id="e-cover">${it.cover_data
+          ? `<img src="${it.cover_data}" alt="">` : '<span class="hint">无封面</span>'}</div>
+      </div>
+      <div class="btn-row">
+        <button class="btn mini" data-e="up">上传图片</button>
+        <button class="btn mini" data-e="clear">清空封面</button>
+      </div>
+      <input type="file" id="e-file" accept="image/*" hidden>
+    </div>
+  </div>
+
+  <div class="org-match">
+    <div class="field" style="max-width:150px">
+      <label>来源</label>
+      <select id="e-plat"></select>
+    </div>
+    <div class="field" style="max-width:300px">
+      <label>搜关键词（歌名 / 歌手）</label>
+      <input id="e-kw" placeholder="如：屋顶 周杰伦">
+    </div>
+    <button class="btn mini" data-e="search"><svg><use href="#ic-search"/></svg>搜索</button>
+    <div class="field" style="max-width:180px">
+      <label>或按网易云歌曲 ID</label>
+      <input id="e-sid" placeholder="如 5257138">
+    </div>
+    <button class="btn mini" data-e="match">匹配</button>
+  </div>
+  <div id="e-cands"></div>
+  <p class="hint" id="e-note"></p>
+  <div class="btn-row">
+    <button class="btn primary" data-e="save"><svg><use href="#ic-check"/></svg>保存</button>
+    <button class="btn" data-e="cancel">取消</button>
+    <button class="btn mini" data-e="auto"><svg><use href="#ic-spark"/></svg>自动刮削（只填表，不保存）</button>
+  </div>`;
+}
+
+function bindEditor(panel, it) {
+  let coverData = '';            // 新选的封面（data URL）
+  let coverUrl = '';             // 候选带来的封面地址（任意平台）
+  const q = (id) => panel.querySelector('#' + id);
+  const note = (msg, type) => {
+    const el = panel.querySelector('#e-note');
+    el.textContent = msg || '';
+    el.style.color = type === 'err' ? 'var(--warn)' : '';
+  };
+
+  const fill = (p) => {
+    if (p.title != null) q('e-title').value = p.title || '';
+    if (p.artist != null) q('e-artist').value = p.artist || '';
+    if (p.album != null) q('e-album').value = p.album || '';
+    if (p.album_artist != null) q('e-album_artist').value = p.album_artist || '';
+    if (p.track != null) q('e-track').value = p.track || '';
+    if (p.disc != null) q('e-disc').value = p.disc || '';
+    if (p.date != null) q('e-date').value = p.date || '';
+    if (p.lyrics != null) q('e-lyrics').value = p.lyrics || '';
+    if (p.cover_data) {
+      coverData = p.cover_data;
+      coverUrl = '';
+      panel.querySelector('#e-cover').innerHTML = `<img src="${p.cover_data}" alt="">`;
+    } else if (p.cover_url) {
+      coverUrl = p.cover_url;
+      coverData = '';
+      panel.querySelector('#e-cover').innerHTML = `<img src="${p.cover_url}" alt="" referrerpolicy="no-referrer">`;
+    }
+  };
+
+  panel.querySelector('[data-e=up]').onclick = () => q('e-file').click();
+  q('e-file').onchange = () => {
+    const f = q('e-file').files[0];
+    if (!f) return;
+    const rd = new FileReader();
+    rd.onload = () => {
+      coverData = String(rd.result);
+      panel.querySelector('#e-cover').innerHTML = `<img src="${coverData}" alt="">`;
+      note('已选择本地图片，保存后生效');
+    };
+    rd.readAsDataURL(f);
+  };
+  panel.querySelector('[data-e=clear]').onclick = () => {
+    coverData = '__clear__';
+    panel.querySelector('#e-cover').innerHTML = '<span class="hint">保存后清空</span>';
+    note('保存后封面将被清空');
+  };
+  panel.querySelector('[data-e=cancel]').onclick = () => {
+    const row = panel.closest('.trk');
+    panel.hidden = true;
+    panel.innerHTML = '';
+    row.scrollIntoView({ block: 'nearest' });
+  };
+
+  // 自动刮削：只填表，不写文件（先看后存）
+  panel.querySelector('[data-e=auto]').onclick = async (e) => {
+    const b = e.currentTarget;
+    b.disabled = true;
+    note('正在按现有标签匹配网易云…');
+    const r = await jsonReq('/api/organize/scrape', 'POST', { path: it.path, preview: true });
+    b.disabled = false;
+    if (!r.ok || !r.data.ok) { note((r.data && r.data.reason) || '没匹配到', 'err'); return; }
+    fill(r.data.preview || {});
+    const m = r.data.matched || {};
+    note(`匹配到：${m.name || ''} - ${m.artist || ''}${m.album ? ' · ' + m.album : ''}（确认无误后点保存）`);
+  };
+
+  // 关键词搜索候选（可选来源平台）
+  panel.querySelector('[data-e=search]').onclick = async () => {
+    const kw = (q('e-kw').value || '').trim();
+    if (!kw) { note('请先填写歌手或歌名', 'err'); return; }
+    const plat = q('e-plat').value || 'wy';
+    note('搜索中…');
+    const r = await jsonReq('/api/organize/search', 'POST', { q: kw, platform: plat });
+    if (!r.ok) { note(r.data.error || '搜索失败', 'err'); return; }
+    renderCands(panel, r.data.items || [], fill);
+    note(`「${q('e-plat').selectedOptions[0] ? q('e-plat').selectedOptions[0].textContent : plat}」找到 ${(r.data.items || []).length} 个候选，点一条即填入表单`);
+  };
+
+  // 来源下拉（wy / tx / kw / kg / mg）
+  (async () => {
+    const sel = q('e-plat');
+    if (sel.options.length) return;
+    const r = await jsonReq('/api/organize/platforms');
+    if (r.ok) {
+      sel.innerHTML = (r.data.platforms || [])
+        .map(p => `<option value="${esc(p.id)}">${esc(p.name)}</option>`).join('');
+    }
+  })();
+
+  // 按网易云 ID 匹配
+  panel.querySelector('[data-e=match]').onclick = async () => {
+    const sid = (q('e-sid').value || '').trim();
+    if (!sid) { note('请填写网易云歌曲 ID', 'err'); return; }
+    note('按 ID 匹配中…');
+    const r = await jsonReq('/api/organize/match', 'POST', { id: sid });
+    if (!r.ok) { note(r.data.error || '没找到这首歌', 'err'); return; }
+    const s = r.data.song;
+    fill({
+      title: s.name, artist: s.artist, album: s.album, album_artist: s.artist,
+      track: s.track, date: s.date, lyrics: s.lyric || '', cover_data: s.cover_data || '',
+    });
+    note(`已按 ID ${sid} 带出：${s.name} - ${s.artist}（确认无误后点保存）`);
+  };
+
+  // 保存
+  panel.querySelector('[data-e=save]').onclick = async (e) => {
+    const b = e.currentTarget;
+    b.disabled = true;
+    const body = {
+      path: it.path,
+      title: q('e-title').value, artist: q('e-artist').value,
+      album: q('e-album').value, album_artist: q('e-album_artist').value,
+      track: q('e-track').value || 0, disc: q('e-disc').value || 0,
+      date: q('e-date').value, lyrics: q('e-lyrics').value,
+    };
+    if (coverData === '__clear__') body.clear_cover = true;
+    else if (coverData) body.cover_data = coverData;
+    else if (coverUrl) body.cover_url = coverUrl;
+    const r = await jsonReq('/api/organize/save', 'POST', body);
+    b.disabled = false;
+    if (!r.ok) { note(r.data.error || '保存失败', 'err'); return; }
+    toast('已保存', 'ok');
+    load();
+  };
+
+  q('e-kw').onkeydown = (e) => { if (e.key === 'Enter') panel.querySelector('[data-e=search]').click(); };
+  q('e-sid').onkeydown = (e) => { if (e.key === 'Enter') panel.querySelector('[data-e=match]').click(); };
+}
+
+function renderCands(panel, list, fill) {
+  const box = panel.querySelector('#e-cands');
+  if (!list.length) { box.innerHTML = ''; return; }
+  box.innerHTML = '<div class="cands">' + list.map((c, i) => `
+    <div class="cand" data-i="${i}">
+      ${c.cover
+        ? `<img class="cand-cov" src="${esc(c.cover)}" alt="" referrerpolicy="no-referrer" onerror="this.style.visibility='hidden'">`
+        : '<span class="cand-cov"></span>'}
+      <strong>${esc(c.name)}</strong>
+      <span class="src-tag">${esc(c.source_name || '')}</span>
+      <span>${esc(c.artist)}${c.album ? ' · ' + esc(c.album) : ''}${c.duration ? ' · ' + fmtDur(c.duration) : ''}</span>
+      <span class="hint mono">id ${esc(c.id)}</span>
+    </div>`).join('') + '</div>';
+  box.querySelectorAll('.cand').forEach(el => {
+    el.onclick = async () => {
+      const c = list[Number(el.dataset.i)];
+      const note = panel.querySelector('#e-note');
+      box.querySelectorAll('.cand').forEach(x => x.classList.remove('on'));
+      el.classList.add('on');
+      const plat = c.platform || 'wy';
+      const art0 = (c.artist || '').split('/')[0];
+      if (plat === 'wy') {
+        fill({ title: c.name, artist: c.artist, album: c.album, album_artist: art0,
+               cover_url: c.cover || '' });
+        note.textContent = '正在取详情与歌词…';
+        const r = await jsonReq('/api/organize/match', 'POST', { id: c.id });
+        if (r.ok) {
+          const s = r.data.song || {};
+          fill({ title: s.name || c.name, artist: s.artist || c.artist, album: s.album || c.album,
+                 album_artist: (s.artist || c.artist || '').split('/')[0],
+                 track: s.track || '', date: s.date || '',
+                 lyrics: s.lyric || '', cover_data: s.cover_data || '' });
+          note.textContent = `已填入：${s.name || ''} - ${s.artist || ''}（确认无误后点保存）`;
+        } else {
+          note.textContent = '详情取不到，已按候选信息填入';
+        }
+      } else {
+        fill({ title: c.name, artist: c.artist, album: c.album, album_artist: art0,
+               cover_url: c.cover || '' });
+        note.textContent = `已填入「${c.source_name}」的标签与封面，正在去网易云找歌词…`;
+        const r = await jsonReq('/api/organize/lyric', 'POST', { name: c.name, artist: c.artist });
+        if (r.ok && r.data.lyric) {
+          fill({ lyrics: r.data.lyric });
+          note.textContent = `已填入「${c.source_name}」的标签与封面；歌词取自网易云《${r.data.from}》（确认后点保存）`;
+        } else {
+          note.textContent = `已填入「${c.source_name}」的标签与封面；网易云没找到歌词，可手动粘贴`;
+        }
+      }
+    };
+  });
+}
+
+// ---------------------------------------------------------------- 队列
+function renderQueue(s) {
+  const card = document.getElementById('qcard');
+  const box = document.getElementById('queue');
+  if (!s || (!s.busy && !(s.tasks || []).length)) {
+    card.hidden = true;
+    return;
+  }
+  card.hidden = false;
+  const label = s.busy ? (s.paused ? `已暂停 ${s.paused} 个` : '整理中')
+    : `空闲（完成 ${s.done} · 失败 ${s.failed}）`;
+  document.getElementById('q-state').textContent = label;
+  document.getElementById('q-state').className = 'pill' + (s.failed && !s.busy ? ' warn' : '');
+  box.innerHTML = (s.tasks || []).slice(-8).reverse().map(t => `
+    <div class="trk">
+      <span class="no"></span>${phBox('ic-note')}
+      <span class="meta"><strong>${esc(t.title || baseName(t.path))}</strong>
+        <span>${esc(t.artist || '')}${t.source ? ' · 已写入 ' + esc(t.source) : ''}</span></span>
+      <span class="right">
+        <span class="st"><span class="pill ${t.state === 'failed' ? 'warn' : ''}"><span class="dot-i"></span>${stateText(t.state)}</span></span>
+        <button class="btn mini" data-q="pause">暂停</button>
+        <button class="btn mini" data-q="resume">继续</button>
+        <button class="btn mini" data-q="cancel">取消</button>
+      </span>
+    </div>`).join('');
+  box.querySelectorAll('.trk').forEach((row, idx) => {
+    const t = (s.tasks || []).slice(-8).reverse()[idx];
+    if (!t) return;
+    row.querySelectorAll('[data-q]').forEach(b => {
+      b.onclick = async () => {
+        await jsonReq(`/api/organize/queue/${t.track_id}/${b.dataset.q}`, 'POST');
+        pollQueue();
+      };
+    });
+  });
+}
+
+function stateText(s) {
+  return { queued: '排队中', downloading: '处理中', paused: '已暂停',
+           done: '已完成', failed: '失败', canceled: '已取消' }[s] || s;
+}
+
+async function pollQueue() {
+  const r = await jsonReq('/api/organize/queue');
+  if (r.ok) renderQueue(r.data.organize);
+}
+
+// 筛选片：标签 / 封面 / 歌词 三组，各选有/缺，组间是「并且」
+bindChips('chips', ST, load);
+
+// ---------------------------------------------------------------- 加载
+async function load() {
+  const pager = document.getElementById('pager');
+  const url = `/api/organize/list?page=${ST.page}&size=${ST.size}&q=${encodeURIComponent(ST.q)}` +
+    `&tag=${ST.tag}&cover=${ST.cover}&lyric=${ST.lyric}`;
+  const r = await jsonReq(url);
+  if (!r.ok) { document.getElementById('list').innerHTML = `<p class="empty">${esc(r.data.error || '读取失败')}</p>`; return; }
+  const d = r.data;
+  items = d.items || [];
+  paintAudit(d.audit);
+  paintChips('chips', ST, d.counts);
+  render();
+  renderPager(pager, {
+    page: d.page, pages: d.pages, total: d.total, size: d.size,
+    unit: '首', sizes: [20, 50, 100, 200],
+    onGo: (page, size) => { ST.page = page; ST.size = size; load(); },
+  });
+}
+
+document.getElementById('btn-scan').onclick = async (e) => {
+  const b = e.currentTarget;
+  b.disabled = true;
+  toast('正在扫描音乐库…', 'ok');
+  const r = await jsonReq('/api/organize/scan', 'POST');
+  b.disabled = false;
+  if (!r.ok) { toast(r.data.error || '扫描失败', 'err'); return; }
+  toast(`扫描完成：${r.data.scanned} 首（重新读取 ${r.data.changed} 首）`, 'ok');
+  load();
+};
+
+document.getElementById('btn-backfill').onclick = async (e) => {
+  const b = e.currentTarget;
+  b.disabled = true;
+  const r = await jsonReq('/api/organize/backfill', 'POST', { q: ST.q });
+  b.disabled = false;
+  if (!r.ok) { toast(r.data.error || '入队失败', 'err'); return; }
+  if (!r.data.added) { toast('没有需要补齐的曲目', 'ok'); return; }
+  toast(`已排入 ${r.data.added} 首（共 ${r.data.candidates} 首待处理）`, 'ok');
+  pollQueue();
+};
+
+document.getElementById('btn-qp').onclick = () => bulk('pause-all');
+document.getElementById('btn-qr').onclick = () => bulk('resume-all');
+document.getElementById('btn-qc').onclick = () => bulk('cancel-all');
+document.getElementById('btn-qx').onclick = () => bulk('clear');
+async function bulk(action) {
+  const r = await jsonReq('/api/organize/queue/' + action, 'POST');
+  if (r.ok) toast(`已处理 ${r.data.count} 个任务`, 'ok');
+  pollQueue();
+}
+
+// 勾选
+document.getElementById('btn-selpage').onclick = () => {
+  items.forEach(t => SEL.add(t.path));
+  render();
+};
+document.getElementById('btn-unselpage').onclick = () => {
+  items.forEach(t => SEL.delete(t.path));
+  render();
+};
+document.getElementById('btn-selall').onclick = async () => {
+  const r = await jsonReq(`/api/organize/list?page=1&size=200&q=${encodeURIComponent(ST.q)}`);
+  if (!r.ok) return;
+  (r.data.items || []).forEach(t => SEL.add(t.path));
+  toast(`已勾选前 ${(r.data.items || []).length} 首（可翻页继续勾选）`, 'ok');
+  render();
+};
+document.getElementById('btn-unselall').onclick = () => {
+  SEL.clear();
+  render();
+  toast('已取消全部勾选', 'ok');
+};
+document.getElementById('btn-scrapesel').onclick = async (e) => {
+  if (!SEL.size) { toast('请先勾选曲目', 'err'); return; }
+  const b = e.currentTarget;
+  b.disabled = true;
+  toast(`正在刮削 ${SEL.size} 首，稍等…`, 'ok');
+  let ok = 0, bad = 0;
+  for (const path of [...SEL]) {
+    const r = await jsonReq('/api/organize/scrape', 'POST', { path });
+    (r.ok && r.data.ok) ? ok++ : bad++;
+  }
+  b.disabled = false;
+  toast(`刮削完成：成功 ${ok} 首${bad ? `，失败 ${bad} 首` : ''}`, bad ? 'err' : 'ok');
+  load();
+};
+document.getElementById('btn-delsel').onclick = async (e) => {
+  if (!SEL.size) { toast('请先勾选曲目', 'err'); return; }
+  if (!confirm(`把勾选的 ${SEL.size} 个文件移入回收站？\n文件不会立即删除，可在回收站找回。`)) return;
+  const b = e.currentTarget;
+  b.disabled = true;
+  const r = await jsonReq('/api/organize/delete', 'POST', { paths: [...SEL] });
+  b.disabled = false;
+  if (!r.ok) { toast(r.data.error || '删除失败', 'err'); return; }
+  SEL.clear();
+  toast(`已移入回收站 ${r.data.count} 个文件`, 'ok');
+  load();
+};
+
+const qEl = document.getElementById('q');
+let qTimer = null;
+qEl.oninput = () => {
+  clearTimeout(qTimer);
+  qTimer = setTimeout(() => { ST.q = qEl.value.trim(); ST.page = 1; load(); }, 400);
+};
+qEl.onkeydown = (e) => { if (e.key === 'Enter') { ST.q = qEl.value.trim(); ST.page = 1; load(); } };
+
+load();
+setInterval(pollQueue, 2500);
+</script>
+{% endblock %}

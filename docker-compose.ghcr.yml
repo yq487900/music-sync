@@ -1,13 +1,14 @@
+# 直接用已发布的镜像跑（不需要源码、不需要构建工具）
+#   cp .env.example .env && docker compose -f docker-compose.ghcr.yml up -d
+# 想自己构建源码：用 docker-compose.yml（build: .）
 services:
   musicsync:
-    build: .
+    image: ghcr.io/yq487900/music-sync:latest
     container_name: music-sync
     ports:
-      # 访问地址：http://<NAS_IP>:13570  （详见 README.md）
       - "${APP_PORT:-13570}:13570"
     volumes:
       - musicsync_data:/data
-      # 音乐下载目录
       - ${MUSIC_DIR:-/mnt/music}:/music
     environment:
       - TZ=Asia/Shanghai

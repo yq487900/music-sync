@@ -1,0 +1,590 @@
+{% extends "base.html" %}
+{% block title %}MusicSync · 云盘{% endblock %}
+{% block content %}
+
+<div class="card">
+  <h1>网易云音乐云盘</h1>
+  <p class="sub">把本地下载好的歌曲备份到云盘；上传后会自动补齐封面、专辑、歌手与歌词。</p>
+  <div class="kv"><span class="k">云盘歌曲</span><span class="v" id="q-count">—</span></div>
+  <div class="kv"><span class="k">已用容量</span><span class="v" id="q-size">—</span></div>
+  <div class="kv"><span class="k">本地已下载</span><span class="v" id="q-local">—</span></div>
+  <div class="kv"><span class="k">待上传</span><span class="v" id="q-wait">—</span></div>
+  <div class="btn-row">
+    <button class="btn primary" id="btn-up-all"><svg><use href="#ic-up"/></svg>全部上传（本地未上传的）</button>
+    <button class="btn" id="btn-refresh">刷新</button>
+  </div>
+  <div class="bar" id="bar" style="display:none"><i></i></div>
+  <p class="hint" id="progress" style="display:none"></p>
+</div>
+
+<div class="card">
+  <h2>上传队列</h2>
+  <p class="sub">失败或取消的任务会留在列表里（不会自动消失），确认后可以点「清空已结束」整理掉。</p>
+  <div class="btn-row">
+    <button class="btn mini" id="uq-pause">全部暂停</button>
+    <button class="btn mini" id="uq-resume">全部继续</button>
+    <button class="btn mini" id="uq-cancel">全部取消</button>
+    <button class="btn mini" id="uq-clear">清空已结束</button>
+  </div>
+  <div id="queue"></div>
+</div>
+
+<div class="card">
+  <h2>待上传的本地歌曲</h2>
+  <p class="sub">已下载到本地、还没进云盘的歌曲。</p>
+  <div class="searchbar">
+    <svg><use href="#ic-search"/></svg>
+    <input id="qsearch-local" placeholder="搜歌名 / 歌手 / 专辑">
+  </div>
+  <div id="local-list"><div class="empty"><div class="big">⏳</div>正在加载…</div></div>
+  <div class="pager" id="local-pager" style="display:none"></div>
+</div>
+
+<div class="card">
+  <h2>云盘歌曲</h2>
+  <p class="sub">网易云匹配错了？点每首歌的「编辑」，输入正确的网易云歌曲 ID 点「匹配」即可纠正。</p>
+  <div class="searchbar">
+    <svg><use href="#ic-search"/></svg>
+    <input id="qsearch-cloud" placeholder="搜整个云盘：歌名 / 歌手 / 专辑">
+  </div>
+  <div class="chips" id="chips">
+    <span class="lbl">封面/信息</span>
+    <button class="chip" data-k="cover" data-v="all" data-n="total">全部<span class="n"></span></button>
+    <button class="chip" data-k="cover" data-v="yes" data-n="cover_yes">有<span class="n"></span></button>
+    <button class="chip" data-k="cover" data-v="no" data-n="cover_no">缺<span class="n"></span></button>
+    <span class="sep"></span>
+    <span class="lbl">在本地</span>
+    <button class="chip" data-k="local" data-v="all" data-n="total">全部<span class="n"></span></button>
+    <button class="chip" data-k="local" data-v="yes" data-n="local_yes">在<span class="n"></span></button>
+    <button class="chip" data-k="local" data-v="no" data-n="local_no">不在<span class="n"></span></button>
+    <span class="sep"></span>
+    <span class="lbl">在歌单</span>
+    <button class="chip" data-k="pl" data-v="all" data-n="total">全部<span class="n"></span></button>
+    <button class="chip" data-k="pl" data-v="yes" data-n="pl_yes">在<span class="n"></span></button>
+    <button class="chip" data-k="pl" data-v="no" data-n="pl_no">不在<span class="n"></span></button>
+  </div>
+  <div id="cloud-list"><div class="empty"><div class="big">⏳</div>正在加载…</div></div>
+  <div class="pager" id="cloud-pager" style="display:none"></div>
+</div>
+
+{% endblock %}
+
+{% block script %}
+<script>
+const LS = {page: 1, size: 20, q: ''};
+// 云盘歌曲：cover=封面/信息（有/缺）、local=在不在本地、pl=在不在歌单
+const CS = {page: 1, size: 20, q: '', cover: 'all', local: 'all', pl: 'all'};
+let CS_FRESH = 1;                 // 打开页面第一次请求时让后端重新索引一遍云盘
+let ciWatch = 0;
+let ciLoaded = false;
+const NO_INFO_TIP = '网易云数据库里没有这首歌的信息（周杰伦的一些歌就是这样），'
+  + '所以云盘里也没封面。请在手机 App 或电脑客户端重新上传一次。';
+let polling = null;
+
+function fmtSize(n) {
+  n = Number(n) || 0;
+  if (n >= 1024 * 1024 * 1024) return (n / 1024 / 1024 / 1024).toFixed(2) + ' GB';
+  if (n >= 1024 * 1024) return (n / 1024 / 1024).toFixed(1) + ' MB';
+  if (n >= 1024) return (n / 1024).toFixed(0) + ' KB';
+  return n + ' B';
+}
+function fmtDur(s) {
+  s = Number(s) || 0;
+  return Math.floor(s / 60) + ':' + String(s % 60).padStart(2, '0');
+}
+function upBtn(tid) {
+  return `<button class="btn mini" data-up="${tid}">上传</button>`;
+}
+
+/* ---------- 配额 ---------- */
+async function loadQuota() {
+  const r = await jsonReq('/api/cloud/quota');
+  if (!r.ok) {
+    document.getElementById('q-count').innerHTML =
+      `<a href="/config#login" style="color:var(--accent-1)">${esc(r.data.error || '读取失败')}</a>`;
+    return false;
+  }
+  document.getElementById('q-count').textContent = r.data.count + ' 首';
+  document.getElementById('q-size').textContent =
+    fmtSize(r.data.size) + (r.data.max_size ? ' / ' + fmtSize(r.data.max_size) : '');
+  document.getElementById('q-local').textContent = r.data.local_downloaded + ' 首';
+  document.getElementById('q-wait').textContent = r.data.waiting + ' 首';
+  return true;
+}
+
+/* ---------- 待上传的本地歌曲 ---------- */
+function renderLocal(d) {
+  const box = document.getElementById('local-list');
+  const pager = document.getElementById('local-pager');
+  if (!d.items.length) {
+    box.innerHTML = '<div class="empty"><div class="big">✅</div>本地歌曲都已上传</div>';
+    pager.style.display = 'none';
+    return;
+  }
+  box.innerHTML = d.items.map(t => `
+    <div class="trk">
+      <span class="no"></span>
+      ${t.has_cover && t.file
+          ? `<img class="cov" loading="lazy" alt="" src="/api/organize/cover?path=${encodeURIComponent(t.file)}&v=${t.mtime || 0}">`
+          : phBox('ic-note')}
+      <span class="meta">
+        <strong>${esc(t.title || '未知曲目')}</strong>
+        <span>${esc(t.artist || '')}${t.album ? ' · ' + esc(t.album) : ''}
+          ${t.size ? ' · ' + fmtSize(t.size) : ''}</span>
+      </span>
+      <span class="right">
+        ${t.cloud_state === 'failed'
+            ? `<span class="pill warn"><span class="dot-i"></span>上次失败</span>
+               <span class="hint">${esc(t.cloud_error || '')}</span>`
+            : '<span class="pill warn"><span class="dot-i"></span>待上传</span>'}
+        ${upBtn(t.id)}
+      </span>
+    </div>`).join('');
+  bindUp(box);
+  pager.style.display = '';
+  renderPager(pager, {
+    page: d.page, pages: d.pages, total: d.total, size: d.size, unit: '首',
+    sizes: [20, 50, 100, 200],
+    onGo: (page, size) => { LS.page = page; LS.size = size; loadLocal(); }
+  });
+}
+
+async function loadLocal() {
+  const box = document.getElementById('local-list');
+  const r = await jsonReq(`/api/cloud/local?page=${LS.page}&size=${LS.size}&q=${encodeURIComponent(LS.q)}`);
+  if (!r.ok) { box.innerHTML = '<div class="empty">加载失败</div>'; return; }
+  LS.page = r.data.page; LS.size = r.data.size;
+  renderLocal(r.data);
+}
+
+/* ---------- 云盘歌曲 ---------- */
+function renderCloud(d) {
+  const box = document.getElementById('cloud-list');
+  const pager = document.getElementById('cloud-pager');
+  if (!d.items.length) {
+    box.innerHTML = '<div class="empty"><div class="big">☁️</div>云盘还是空的</div>';
+    pager.style.display = 'none';
+    return;
+  }
+  box.innerHTML = d.items.map(t => `
+    <div class="trk">
+      <span class="no"></span>
+      ${t.cover && t.has_cover
+          ? `<img class="cov" src="${esc(t.cover)}" alt="" loading="lazy">`
+          : phBox('ic-no-cover', NO_INFO_TIP)}
+      <span class="meta">
+        <strong>${esc(t.title)}</strong>
+        <span>${esc(t.artist)}${t.album ? ' · ' + esc(t.album) : ''}
+          ${t.duration ? ' · ' + fmtDur(t.duration) : ''}
+          ${t.file_size ? ' · ' + fmtSize(t.file_size) : ''}</span>
+      </span>
+      <span class="right cld">
+        ${t.from_us ? '<span class="pill"><span class="dot-i"></span>本工具上传</span>' : ''}
+        <button class="btn mini" data-edit="${esc(t.sid)}">编辑</button>
+        <button class="btn mini" data-del="${esc(t.sid)}">删除</button>
+        ${localCell({local: t.in_local})}
+        ${cloudCell({in_cloud: true, local: t.in_local})}
+        ${playlistCell(t)}
+      </span>
+    </div>
+    <div class="cloud-edit" hidden></div>`).join('');
+  box.querySelectorAll('.trk').forEach(row => {
+    const btn = row.querySelector('[data-edit]');
+    if (!btn) return;
+    const item = d.items.find(x => String(x.sid) === String(btn.dataset.edit));
+    btn.onclick = () => {
+      const host = row.nextElementSibling;
+      if (!host.classList.contains('cloud-edit')) return;
+      if (!host.hidden) { host.hidden = true; return; }
+      host.innerHTML = cloudEditHtml();
+      host.hidden = false;
+      bindCloudEdit(host, item || { sid: btn.dataset.edit });
+    };
+  });
+  // 点「不在歌单」图标 → 把这首加进一个或多个歌单
+  box.querySelectorAll('[data-addpl]').forEach(el => {
+    el.onclick = () => {
+      const btn = el.closest('.trk').querySelector('[data-edit]');
+      const item = d.items.find(x => String(x.sid) === String(btn.dataset.edit));
+      if (item) addToPlaylists(item);
+    };
+  });
+  box.querySelectorAll('[data-del]').forEach(b => {
+    b.onclick = async () => {
+      if (!confirm('确定从云盘删除这首歌？')) return;
+      const r2 = await jsonReq('/api/cloud/' + encodeURIComponent(b.dataset.del), 'DELETE');
+      if (!r2.ok) { toast(r2.data.error || '删除失败', 'err'); return; }
+      toast('已从云盘删除', 'ok');
+      loadCloud(); loadQuota();
+    };
+  });
+  pager.style.display = '';
+  renderPager(pager, {
+    page: d.page, pages: d.pages, total: d.total, size: d.size, unit: '首',
+    sizes: [20, 50, 100],
+    onGo: (page, size) => { CS.page = page; CS.size = size; loadCloud(); }
+  });
+}
+
+/* ---------- 加到歌单（点云盘页「不在歌单」图标） ---------- */
+async function addToPlaylists(item) {
+  const r = await jsonReq('/api/account/playlists?page=1&size=100');
+  if (!r.ok) { toast(r.data.error || '读取歌单失败', 'err'); return; }
+  const pls = (r.data.items || []).filter(p => p && p.id);
+  const rows = pls.map(p => `
+      <label class="pl-row">
+        <input type="checkbox" value="${esc(p.id)}">
+        <span class="pl-name">${esc(p.name || p.id)}</span>
+        <span class="hint">${p.total || 0} 首</span>
+      </label>`).join('');
+  const back = openModal(`把「${item.title || item.sid}」加到歌单`,
+    `<div class="searchbar" style="margin-bottom:10px">
+       <svg><use href="#ic-search"/></svg>
+       <input id="plq" placeholder="搜歌单名（共 ${pls.length} 个歌单）">
+     </div>
+     <div class="pl-pick" id="plpick">${rows || '<div class="hint">没有可选的歌单</div>'}</div>
+     <div class="btn-row" style="margin-top:14px">
+       <button class="btn primary" id="pl-go">加入选中的歌单</button>
+       <span class="hint" id="pl-n">未选择</span>
+     </div>`);
+  const paint = () => {
+    const n = back.querySelectorAll('#plpick input:checked').length;
+    back.querySelector('#pl-n').textContent = n ? `已选 ${n} 个歌单` : '未选择';
+  };
+  back.querySelectorAll('#plpick input').forEach(cb => { cb.onchange = paint; });
+  back.querySelector('#plq').addEventListener('input', (e) => {
+    const kw = e.target.value.trim().toLowerCase();
+    back.querySelectorAll('#plpick .pl-row').forEach(row => {
+      row.style.display = row.textContent.toLowerCase().includes(kw) ? '' : 'none';
+    });
+  });
+  back.querySelector('#pl-go').onclick = async () => {
+    const pids = [...back.querySelectorAll('#plpick input:checked')].map(x => x.value);
+    if (!pids.length) { toast('先勾选要加入的歌单', 'err'); return; }
+    const rr = await jsonReq('/api/playlists/add-tracks', 'POST',
+                             {pids, sids: [String(item.sid)]});
+    if (!rr.ok) { toast(rr.data.error || '加入失败', 'err'); return; }
+    const bad = (rr.data.failed || []);
+    toast(bad.length ? `已加入 ${rr.data.count} 个歌单，${bad.length} 个失败：${bad[0].msg}`
+                     : `已加入 ${rr.data.count} 个歌单`, bad.length ? 'err' : 'ok');
+    back.remove();
+    setTimeout(loadCloud, 2000);      // 歌单索引刷新后状态图标会跟着变
+  };
+}
+
+/* ---------- 云盘歌曲纠错（按 ID 匹配） ---------- */
+function cloudEditHtml() {
+  return `
+  <div class="org-edit">
+    <div class="org-match">
+      <div class="field" style="max-width:150px">
+        <label>来源</label>
+        <select class="ce-plat"></select>
+      </div>
+      <div class="field" style="max-width:260px">
+        <label>搜关键词（找正确的那首）</label>
+        <input class="ce-kw" placeholder="歌名 / 歌手，回车搜索">
+      </div>
+      <button class="btn mini" data-e="search"><svg><use href="#ic-search"/></svg>搜索</button>
+      <div class="field" style="max-width:180px">
+        <label>按网易云歌曲 ID 匹配</label>
+        <input class="ce-sid" placeholder="如 5257138">
+      </div>
+      <button class="btn mini primary" data-e="match"><svg><use href="#ic-check"/></svg>匹配</button>
+    </div>
+    <p class="hint">匹配后这首歌会改用正式曲目的标签、封面和歌词 —— 网易云自动匹配错了就用这个纠正。<br>
+      说明：云盘匹配只能用<b>网易云</b>的 ID。选别的来源是为了帮你确认是哪首歌（看封面和专辑），点它会在网易云再搜一次。</p>
+    <div class="cands ce-cands"></div>
+  </div>`;
+}
+
+function bindCloudEdit(host, item) {
+  const sidInput = host.querySelector('.ce-sid');
+  const kwInput = host.querySelector('.ce-kw');
+  const platSel = host.querySelector('.ce-plat');
+  const cands = host.querySelector('.ce-cands');
+
+  // 来源下拉
+  (async () => {
+    if (platSel.options.length) return;
+    const r = await jsonReq('/api/organize/platforms');
+    if (r.ok) {
+      platSel.innerHTML = (r.data.platforms || [])
+        .map(p => `<option value="${esc(p.id)}">${esc(p.name)}</option>`).join('');
+    }
+  })();
+
+  function renderCands(items) {
+    cands.innerHTML = '<div class="cands">' + items.map((x, i) => `
+      <div class="cand" data-i="${i}">
+        ${x.cover
+          ? `<img class="cand-cov" src="${esc(x.cover)}" alt="" referrerpolicy="no-referrer" onerror="this.style.visibility='hidden'">`
+          : '<span class="cand-cov"></span>'}
+        <strong>${esc(x.name)}</strong>
+        <span class="cand-sub">${esc(x.artist)}${x.album ? ' · ' + esc(x.album) : ''}${x.duration ? ' · ' + fmtDur(x.duration) : ''}</span>
+        <span class="cand-src"><span class="src-tag">${esc(x.source_name || '')}</span>${
+          x.in_cloud ? '<span class="src-tag warn-tag">已在你的云盘</span>' : ''
+        }<span class="cand-id mono">ID ${esc(x.id)}</span></span>
+      </div>`).join('') + '</div>';
+    cands.querySelectorAll('.cand').forEach(c => {
+      c.onclick = async () => {
+        const x = items[Number(c.dataset.i)];
+        cands.querySelectorAll('.cand').forEach(y => y.classList.remove('on'));
+        c.classList.add('on');
+        if (x.in_cloud) {
+          // 这个 id 已经在你的云盘里了（多半是搜索结果里混进来的「你自己的云盘记录」），
+          // 拿它去匹配网易云一定回「纠错后的文件已在云盘存在」
+          toast('这条已经在你的云盘里了，不能再匹配过去（网易云会拒绝重复）。'
+                + '如果你是想给这条补封面，可以选择别的正式版本再试。', 'err');
+          return;
+        }
+        if ((x.platform || 'wy') === 'wy') {
+          sidInput.value = x.id;                 // 网易云的条目：直接可匹配
+        } else {
+          // 别的平台只能帮我们确认是哪首歌 —— 用它的歌名+歌手去网易云再搜一次
+          kwInput.value = `${x.name} ${(x.artist || '').split('/')[0]}`.trim();
+          platSel.value = 'wy';
+          await doSearch();
+        }
+      };
+    });
+  }
+
+  async function doSearch() {
+    const kw = kwInput.value.trim();
+    if (!kw) return;
+    const plat = platSel.value || 'wy';
+    cands.innerHTML = '<div class="hint">搜索中…</div>';
+    const r = await jsonReq('/api/organize/search', 'POST', {q: kw, platform: plat});
+    if (!r.ok) { cands.innerHTML = `<div class="hint">${esc(r.data.error || '搜索失败')}</div>`; return; }
+    const items = r.data.items || [];
+    if (!items.length) { cands.innerHTML = '<div class="hint">没找到匹配的歌曲</div>'; return; }
+    renderCands(items);
+    if (plat !== 'wy') {
+      cands.insertAdjacentHTML('afterbegin',
+        '<div class="hint">下面是别的平台的条目，点一条会自动去网易云再搜一次（云盘匹配只能用网易云 ID）</div>');
+    }
+  }
+
+  host.querySelector('[data-e=search]').onclick = doSearch;
+  kwInput.addEventListener('keydown', e => {
+    if (e.key === 'Enter') { e.preventDefault(); doSearch(); }
+  });
+
+  host.querySelector('[data-e=match]').onclick = async (e) => {
+    const asid = sidInput.value.trim();
+    if (!/^\d+$/.test(asid)) { toast('请填写纯数字的网易云歌曲 ID', 'err'); return; }
+    const btn = e.currentTarget;
+    btn.disabled = true;
+    const r = await jsonReq(`/api/cloud/songs/${encodeURIComponent(item.sid)}/match`, 'POST', {asid});
+    btn.disabled = false;
+    if (!r.ok) {
+      // 409 = 条目已经不在了（多半是刚匹配成功、云盘换了新记录）→ 提示 + 刷新列表
+      toast(r.data.error || '匹配失败', r.data.already_matched ? 'ok' : 'err');
+      if (r.data.already_matched) setTimeout(loadCloud, 1500);
+      return;
+    }
+    const s = r.data.song || {};
+    toast(`已匹配为：${s.title || asid}${s.artist ? ' - ' + s.artist : ''}`, 'ok');
+    loadCloud();
+  };
+}
+
+async function loadCloud() {
+  const box = document.getElementById('cloud-list');
+  const r = await jsonReq(`/api/cloud?page=${CS.page}&size=${CS.size}&q=${encodeURIComponent(CS.q)}`
+    + `&cover=${CS.cover}&local=${CS.local}&pl=${CS.pl}&fresh=${CS_FRESH}`);
+  CS_FRESH = 0;                   // 只有打开页面那一次强制重索引
+  if (!r.ok) {
+    box.innerHTML = `<div class="empty"><div class="big">🔑</div>${esc(r.data.error || '加载失败')}
+      <br><span class="hint"><a href="/config#login" style="color:var(--accent-1)">去扫码登录</a></span></div>`;
+    document.getElementById('cloud-pager').style.display = 'none';
+    return;
+  }
+  CS.page = r.data.page; CS.size = r.data.size;
+  if (!r.data.items.length && r.data.cloud_index && !r.data.cloud_index.ready) {
+    box.innerHTML = '<div class="empty"><div class="big">⏳</div>正在读取云盘…读完后会自动显示</div>';
+    document.getElementById('cloud-pager').style.display = 'none';
+    watchCloudIndex();
+    return;
+  }
+  paintChips('chips', CS, r.data.counts);
+  renderCloud(r.data);
+  watchCloudIndex();
+}
+
+/** 后端正在重新索引（打开页面时触发的）→ 好了就自动刷**一次**，然后停。
+    以前这里是「不刷新就再刷列表」，结果变成每 5 秒刷一圈死循环，
+    你一编辑就被刷掉（2026-09-22 修）。 */
+function watchCloudIndex() {
+  if (ciWatch >= 20) return;
+  clearTimeout(window._ciT);
+  window._ciT = setTimeout(checkCloudIndex, 5000);
+}
+/** 正在编辑某一笔（编辑框打开着）→ 先别刷列表，免得把输入框刷掉 */
+function editingNow() {
+  return !!document.querySelector('.cloud-edit:not([hidden])');
+}
+async function checkCloudIndex() {
+  if (editingNow()) {                       // 编辑中：过几秒再看，不刷
+    clearTimeout(window._ciT);
+    window._ciT = setTimeout(checkCloudIndex, 5000);
+    return;
+  }
+  const r = await jsonReq('/api/cloud?page=1&size=1');
+  const ci = (r.ok && r.data.cloud_index) || {};
+  if (ci.refreshing && ciWatch < 20) {
+    ciWatch += 1;
+    watchCloudIndex();
+    return;
+  }
+  ciWatch = 0;
+  if (!ciLoaded) { ciLoaded = true; loadCloud(); }   // 只刷这一次
+}
+
+/* ---------- 上传 ---------- */
+function bindUp(root) {
+  root.querySelectorAll('[data-up]').forEach(b => {
+    b.onclick = async () => {
+      const r = await jsonReq('/api/cloud/upload/' + b.dataset.up, 'POST');
+      if (!r.ok) { toast(r.data.error || '入队失败', 'err'); return; }
+      toast('已加入上传队列', 'ok');
+      pollQueue();
+    };
+  });
+}
+
+document.getElementById('btn-up-all').onclick = async () => {
+  const r = await jsonReq('/api/cloud/upload', 'POST', {all: true});
+  if (!r.ok) { toast(r.data.error || '没有需要上传的曲目', 'err'); return; }
+  toast(`已加入上传队列：${r.data.added} 首`, 'ok');
+  pollQueue();
+};
+// 刷新：把这一页的所有内容都重新拉一遍（云盘信息 / 上传队列 / 待上传本地歌曲 / 云盘歌曲），
+// 并且强制重新索引一遍云盘（否则看到的是最多 10 分钟前的索引，会觉得「刷新没生效」）
+document.getElementById('btn-refresh').onclick = () => {
+  CS_FRESH = 1;
+  ciLoaded = false;
+  toast('正在刷新（含云盘索引，约几十秒）…', 'ok');
+  loadQuota(); loadLocal(); loadCloud(); pollQueue();
+};
+
+/* ---------- 上传队列控制 ---------- */
+[['uq-pause', 'pause-all'], ['uq-resume', 'resume-all'],
+ ['uq-cancel', 'cancel-all'], ['uq-clear', 'clear']].forEach(([id, act]) => {
+  const b = document.getElementById(id);
+  if (!b) return;
+  b.onclick = async () => {
+    const r = await jsonReq(`/api/queue/${act}`, 'POST');
+    if (!r.ok) { toast(r.data.error || '操作失败', 'err'); return; }
+    const n = r.data.count ?? r.data.affected ?? 0;
+    toast(act === 'clear' ? `已清理 ${n} 条结束记录` : '已执行', 'ok');
+    pollQueue();
+  };
+});
+
+/* ---------- 搜索框 ---------- */
+function bindSearch(id, st, reload) {
+  const box = document.getElementById(id);
+  if (!box) return;
+  let timer = null;
+  box.addEventListener('input', () => {
+    clearTimeout(timer);
+    timer = setTimeout(() => { st.q = box.value.trim(); st.page = 1; reload(); }, 400);
+  });
+}
+bindSearch('qsearch-local', LS, loadLocal);
+bindSearch('qsearch-cloud', CS, loadCloud);
+// 云盘歌曲的筛选片：封面/信息、在本地、在歌单（组间是「并且」）
+bindChips('chips', CS, loadCloud);
+
+/* ---------- 上传队列 ---------- */
+function renderQueue(q) {
+  const box = document.getElementById('queue');
+  const tasks = (q.tasks || []).slice().reverse();
+  if (!tasks.length) {
+    box.innerHTML = '<div class="empty">暂无上传任务</div>';
+    return;
+  }
+  box.innerHTML = tasks.map(t => {
+    const state = {
+      queued: '排队中', downloading: '上传中', paused: '已暂停',
+      done: '已完成', failed: '失败', canceled: '已取消'
+    }[t.state] || t.state;
+    const pct = t.total ? `${t.percent}%（${fmtSize(t.done)} / ${fmtSize(t.total)}）` : '';
+    return `
+      <div class="trk">
+        <span class="no"></span>
+        ${phBox(t.state === 'done' ? 'ic-cloud' : 'ic-up')}
+        <span class="meta">
+          <strong>${esc(t.title || '未知曲目')}</strong>
+          <span>${esc(t.artist || '')} · ${state} ${pct}</span>
+          <div class="bar ${t.total ? '' : 'indet'}" style="margin-top:6px"><i style="width:${t.total ? t.percent : 35}%"></i></div>
+          ${t.error ? `<span style="color:var(--err)">${esc(t.error)}</span>` : ''}
+        </span>
+        <span class="right">
+          ${t.state === 'paused' ? `<button class="btn mini" data-q="resume">继续</button>` : ''}
+          ${t.state === 'downloading' ? `<button class="btn mini" data-q="pause">暂停</button>` : ''}
+          ${['queued', 'downloading', 'paused'].includes(t.state)
+              ? `<button class="btn mini" data-q="cancel">取消</button>` : ''}
+          ${['failed', 'canceled'].includes(t.state)
+              ? `<button class="btn mini" data-q="retry">重试</button>` : ''}
+        </span>
+      </div>`;
+  }).join('');
+  box.querySelectorAll('[data-q]').forEach(b => {
+    b.onclick = async () => {
+      const row = b.closest('.trk');
+      const tid = row.dataset.tid;
+      const r = b.dataset.q === 'retry'
+        ? await jsonReq(`/api/cloud/upload/${tid}`, 'POST', {})
+        : await jsonReq(`/api/queue/${tid}/${b.dataset.q}`, 'POST');
+      if (!r.ok) { toast(r.data.error || '操作失败', 'err'); return; }
+      pollQueue();
+    };
+  });
+  // 把 track_id 挂到行上，供按钮使用
+  tasks.forEach((t, i) => {
+    const row = box.children[i];
+    if (row) row.dataset.tid = t.track_id;
+  });
+}
+
+async function pollQueue() {
+  const r = await jsonReq('/api/queue');
+  if (!r.ok) return;
+  const q = r.data.upload;
+  renderQueue(q);
+  const bar = document.getElementById('bar');
+  const txt = document.getElementById('progress');
+  if (q.busy) {
+    bar.style.display = ''; txt.style.display = '';
+    bar.classList.toggle('indet', !q.tasks.length);
+    txt.textContent = `上传中：进行 ${q.downloading} · 排队 ${q.queued} · 完成 ${q.done} · 失败 ${q.failed}`;
+    clearTimeout(polling);
+    polling = setTimeout(() => { pollQueue(); loadQuota(); }, 2000);
+  } else {
+    bar.style.display = 'none';
+    if (q.done || q.failed) {
+      txt.style.display = '';
+      txt.textContent = `本轮上传结束：成功 ${q.done} 首，失败 ${q.failed} 首`;
+      loadQuota(); loadLocal();
+      if (!editingNow()) loadCloud();        // 正在编辑就别刷，免得输入被清掉
+    } else {
+      txt.style.display = 'none';
+    }
+  }
+}
+
+loadQuota().then(ok => {
+  if (ok) { loadLocal(); loadCloud(); }
+  else {
+    document.getElementById('local-list').innerHTML =
+      '<div class="empty">请先登录网易云</div>';
+    document.getElementById('cloud-list').innerHTML =
+      '<div class="empty">请先登录网易云</div>';
+  }
+  pollQueue();
+});
+</script>
+{% endblock %}

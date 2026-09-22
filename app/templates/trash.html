@@ -1,0 +1,178 @@
+{% extends "base.html" %}
+{% block title %}回收站 · MusicSync{% endblock %}
+{% block content %}
+<div class="card">
+  <h2>回收站</h2>
+  <p class="sub">
+    这里放的是在「整理」里移出的歌 —— 文件还在磁盘上，<b>没有真删</b>。
+    「恢复」= 放回音乐库原来的位置（歌单页 / 下载页 / 云盘里的本地状态会跟着变回「已下载」）；
+    「清空」= <b>真正删除本地文件</b>，删了就找不回来了。
+  </p>
+  <div class="stats">
+    <div class="kv"><span class="k">回收站曲目</span><span class="v" id="s-count">—</span></div>
+    <div class="kv"><span class="k">占用空间</span><span class="v" id="s-size">—</span></div>
+    <div class="kv"><span class="k">删除批次</span><span class="v" id="s-batch">—</span></div>
+  </div>
+</div>
+
+<div class="card">
+  <div class="searchbar">
+    <svg><use href="#ic-search"/></svg>
+    <input id="qsearch" placeholder="搜歌名 / 歌手 / 专辑 / 文件名">
+  </div>
+  <div class="btn-row" style="margin:12px 0 4px">
+    <button class="btn mini" id="btn-select-page">勾选本页</button>
+    <button class="btn mini" id="btn-unselect-page">取消本页</button>
+    <button class="btn mini" id="btn-select-all">全部勾选</button>
+    <button class="btn mini" id="btn-unselect-all">全部取消</button>
+    <button class="btn" id="btn-refresh"><svg><use href="#ic-refresh"/></svg>刷新</button>
+    <button class="btn primary" id="btn-restore-sel"><svg><use href="#ic-refresh"/></svg>恢复勾选的</button>
+    <button class="btn mini" id="btn-restore-all">全部恢复</button>
+    <button class="btn" id="btn-purge-sel">清空勾选的</button>
+    <button class="btn mini" id="btn-purge-all">全部清空</button>
+  </div>
+  <div id="list"><div class="empty"><div class="big">⏳</div>正在读取回收站…</div></div>
+  <div id="pager"></div>
+</div>
+{% endblock %}
+
+{% block script %}
+<script>
+const ST = {page: 1, size: 20, q: ''};
+let items = [];          // 当前页
+let allPaths = [];       // 当前搜索条件下的全部文件（用于「全部勾选 / 全部恢复」）
+const SEL = new Set();   // 已勾选的文件路径
+
+const fmtSize = (n) => {
+  if (!n) return '0 B';
+  const u = ['B', 'KB', 'MB', 'GB'];
+  let i = 0, v = n;
+  while (v >= 1024 && i < u.length - 1) { v /= 1024; i += 1; }
+  return (i ? v.toFixed(1) : v) + ' ' + u[i];
+};
+
+async function load() {
+  const r = await jsonReq(`/api/trash?page=${ST.page}&size=${ST.size}&q=${encodeURIComponent(ST.q)}`);
+  const box = document.getElementById('list');
+  if (!r.ok) { box.innerHTML = `<div class="empty">${esc(r.data.error || '读取失败')}</div>`; return; }
+  const d = r.data;
+  items = d.items || [];
+  allPaths = d.all_paths || items.map(t => t.path);
+  ST.page = d.page; ST.size = d.size;
+  const sm = d.summary || {};
+  document.getElementById('s-count').textContent = (sm.count || 0) + ' 首';
+  document.getElementById('s-size').textContent = fmtSize(sm.size || 0);
+  document.getElementById('s-batch').textContent = (sm.batches || 0) + ' 批';
+  render();
+  renderPager(document.getElementById('pager'), {
+    page: d.page, pages: d.pages, total: d.total, size: d.size,
+    unit: '首', sizes: [20, 50, 100, 200],
+    onGo: (page, size) => { ST.page = page; ST.size = size; load(); },
+  });
+}
+
+function render() {
+  const box = document.getElementById('list');
+  if (!items.length) {
+    box.innerHTML = '<div class="empty">回收站是空的 —— 在「整理」里移出的歌会出现在这里</div>';
+    return;
+  }
+  box.innerHTML = items.map(t => `
+    <div class="trk" data-path="${esc(t.path)}">
+      <span class="no"><input type="checkbox" class="sel" ${SEL.has(t.path) ? 'checked' : ''}></span>
+      ${phBox('ic-note')}
+      <span class="meta">
+        <strong>${esc(t.title || t.rel)}</strong>
+        <span>${esc(t.artist || '')}${t.album ? ' · ' + esc(t.album) : ''}
+          · ${fmtSize(t.size)} · 删除于 ${esc(t.deleted_at)}</span>
+      </span>
+      <span class="right">
+        <button class="btn mini" data-restore="${esc(t.path)}">恢复</button>
+        <button class="btn mini" data-purge="${esc(t.path)}">清空</button>
+      </span>
+    </div>`).join('');
+  box.querySelectorAll('.sel').forEach(cb => {
+    cb.onchange = () => {
+      const p = cb.closest('.trk').dataset.path;
+      if (cb.checked) SEL.add(p); else SEL.delete(p);
+      paintSel();
+    };
+  });
+  box.querySelectorAll('[data-restore]').forEach(b => {
+    b.onclick = () => doRestore([b.dataset.restore]);
+  });
+  box.querySelectorAll('[data-purge]').forEach(b => {
+    b.onclick = () => doPurge([b.dataset.purge]);
+  });
+  paintSel();
+}
+
+function paintSel() {
+  const n = SEL.size;
+  const b1 = document.getElementById('btn-restore-sel');
+  const b2 = document.getElementById('btn-purge-sel');
+  b1.textContent = `恢复勾选的${n ? '（' + n + '）' : ''}`;
+  b2.textContent = `清空勾选的${n ? '（' + n + '）' : ''}`;
+  b1.disabled = !n;
+  b2.disabled = !n;
+}
+
+async function doRestore(paths) {
+  if (!paths.length) { toast('先勾选要恢复的歌', 'err'); return; }
+  const r = await jsonReq('/api/trash/restore', 'POST', {paths});
+  if (!r.ok) { toast(r.data.error || '恢复失败', 'err'); return; }
+  const bad = (r.data.failed || []).length;
+  paths.forEach(p => SEL.delete(p));
+  toast(`已恢复 ${r.data.count} 首回音乐库${bad ? `，失败 ${bad} 首` : ''}`, bad ? 'err' : 'ok');
+  load();
+}
+
+async function doPurge(paths) {
+  if (!paths.length) { toast('先勾选要清空的歌', 'err'); return; }
+  if (!confirm(`确定要真正删除这 ${paths.length} 首本地文件吗？删了就找不回来了。`)) return;
+  const r = await jsonReq('/api/trash/purge', 'POST', {paths});
+  if (!r.ok) { toast(r.data.error || '清空失败', 'err'); return; }
+  const bad = (r.data.failed || []).length;
+  paths.forEach(p => SEL.delete(p));
+  toast(`已彻底删除 ${r.data.count} 首${bad ? `，失败 ${bad} 首` : ''}`, bad ? 'err' : 'ok');
+  load();
+}
+
+document.getElementById('btn-select-page').onclick = () => {
+  items.forEach(t => SEL.add(t.path));
+  render();
+  toast(`本页已勾选 ${items.length} 首`, 'ok');
+};
+document.getElementById('btn-unselect-page').onclick = () => {
+  items.forEach(t => SEL.delete(t.path));
+  render();
+};
+document.getElementById('btn-select-all').onclick = () => {
+  allPaths.forEach(p => SEL.add(p));
+  render();
+  toast(`已勾选全部 ${SEL.size} 首`, 'ok');
+};
+document.getElementById('btn-unselect-all').onclick = () => { SEL.clear(); render(); };
+// 刷新：重新扫一遍回收站（刚删进来的歌能马上看到）
+document.getElementById('btn-refresh').onclick = () => { load(); toast('已刷新回收站', 'ok'); };
+document.getElementById('btn-restore-sel').onclick = () => doRestore([...SEL]);
+document.getElementById('btn-purge-sel').onclick = () => doPurge([...SEL]);
+document.getElementById('btn-restore-all').onclick = () => {
+  if (!allPaths.length) { toast('回收站是空的', 'err'); return; }
+  if (!confirm(`确定把回收站里全部 ${allPaths.length} 首恢复到音乐库吗？`)) return;
+  doRestore(allPaths);
+};
+document.getElementById('btn-purge-all').onclick = () => {
+  if (!allPaths.length) { toast('回收站是空的', 'err'); return; }
+  doPurge(allPaths);
+};
+
+let qTimer = null;
+document.getElementById('qsearch').addEventListener('input', (e) => {
+  clearTimeout(qTimer);
+  qTimer = setTimeout(() => { ST.q = e.target.value.trim(); ST.page = 1; load(); }, 400);
+});
+
+load();
+</script>
+{% endblock %}

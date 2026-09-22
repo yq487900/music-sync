@@ -1,0 +1,14 @@
+# 本地运行文件，不进仓库
+.env
+rebuild.sh
+logs.sh
+music/
+__pycache__/
+*.pyc
+
+# 本机备份 / 回档快照（含真实数据库与个人数据）—— 绝不发布
+backups/
+*.bak
+
+# 只在本机用的排查记录（含个人云盘数据）
+docs/云盘封面问题排查.md
