@@ -77,6 +77,8 @@ function fmtSize(n) {
   if (n >= 1024) return (n / 1024).toFixed(0) + ' KB';
   return n + ' B';
 }
+/** 失败原因：去掉「下载失败：」前缀并截断，用于曲目行内展示 */
+const shortErr = (s) => String(s || '').replace(/^下载失败[:：]\s*/, '').slice(0, 46) || '未记录原因';
 function sourceSelect(t) {
   const opts = [['', '自动（官方优先）'], ['netease', '网易云官方']];
   for (const [id, name] of Object.entries(SOURCES)) opts.push([id, name]);
@@ -112,7 +114,8 @@ function renderList(d) {
       <span class="no"><input type="checkbox" class="sel" ${t.selected ? 'checked' : ''}></span>
       ${t.status === 'failed' ? phBox('ic-warn') : phBox('ic-note')}
       <span class="meta">
-        <strong>${esc(t.title || '未知曲目')}</strong>
+        <strong>${esc(t.title || '未知曲目')}${t.status === 'failed' && t.error
+          ? `<span class="fail-tag" title="${esc(t.error)}">${esc(shortErr(t.error))}</span>` : ''}</strong>
         <span>${esc(t.artist || '')}${t.album ? ' · ' + esc(t.album) : ''}<span class="sz">${t.size ? ' · ' + fmtSize(t.size) : ''}</span>${qualTag(t)}</span>
       </span>
       <span class="right ops">
@@ -329,18 +332,9 @@ async function loadFailedSummary() {
   const items = (r.data && r.data.items) || [];
   FAILED_IDS = items.map(function (x) { return x.id; });
   if (!items.length) { box.hidden = true; box.innerHTML = ''; return; }
-  const groups = {};
-  items.forEach(function (x) {
-    let reason = String(x.error || '未记录原因');
-    // 去掉开头的“下载失败：”前缀，按真正的错误类型分组
-    reason = reason.replace(/^下载失败[:：]\s*/, '').split(/[，（(]/)[0].slice(0, 36) || '未记录原因';
-    groups[reason] = (groups[reason] || 0) + 1;
-  });
   box.hidden = false;
-  box.innerHTML = '<span class="hint" style="align-self:center">共 ' + items.length + ' 首失败：</span>'
-    + Object.keys(groups).sort(function (a, b) { return groups[b] - groups[a]; })
-        .map(function (k) { return '<span class="tag">' + esc(k) + ' <b>×' + groups[k] + '</b></span>'; })
-        .join('');
+  box.innerHTML = '<span class="hint" style="align-self:center">共 ' + items.length
+    + ' 首失败 —— 失败原因已标在各自歌名后面，可用「只看失败」过滤查看</span>';
 }
 document.getElementById('btn-only-failed').onclick = function () {
   ST.filter = 'failed'; ST.page = 1; load();

@@ -774,17 +774,19 @@ async def api_set_track_source(tid: int, request: Request):
 
 @app.post("/api/tracks/{tid}/download")
 async def api_download_track(tid: int, request: Request):
-    """单首下载；body.source 可临时指定音源（同时记住该选择）"""
+    """单首下载；body.source 可临时指定音源（同时记住该选择）；body.to_cloud=true 则下载完自动转存云盘"""
     body = {}
     try:
         body = await request.json()
     except Exception:  # noqa: BLE001
         body = {}
     source = body.get("source")
+    to_cloud = bool(body.get("to_cloud"))
     cfg = config.load()
     try:
         task = enqueue_download_one(int(tid), cfg,
-                                    source_pref=(str(source).strip() if source is not None else None))
+                                    source_pref=(str(source).strip() if source is not None else None),
+                                    to_cloud=to_cloud)
     except LookupError:
         return JSONResponse({"error": "曲目不存在"}, status_code=404)
     return {"queued": task.snapshot()}

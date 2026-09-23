@@ -845,3 +845,9 @@ a:focus-visible, button:focus-visible, [role="button"]:focus-visible,
 .rt-sum .tag { font-size: 12px; padding: 4px 11px; border-radius: 999px;
   background: rgba(248,113,113,.14); border: 1px solid rgba(248,113,113,.32); color: #fca5a5; }
 .rt-sum .tag b { font-weight: 600; }
+
+/* ================= 曲目行内的失败原因标签（跟在歌名后） ================= */
+.fail-tag { display: inline-block; margin-left: 8px; padding: 1px 8px; border-radius: 999px;
+  font-size: 11px; font-weight: 400; vertical-align: middle; letter-spacing: 0;
+  color: #fca5a5; background: rgba(248,113,113,.16); border: 1px solid rgba(248,113,113,.3);
+  max-width: min(46vw, 380px); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

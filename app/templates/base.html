@@ -312,37 +312,47 @@ function phBox(icon, tip, cls) {
 
 /** 本地状态：💾 = 已在本地；💾+红感叹号 = 本地没有（悬停看是未下载还是下载失败） */
 /** 状态图标：带 title（桌面悬停）+ data-tip（触屏点击弹提示） */
-function iconTip(cls, tip) {
+function iconTip(cls, tip, sym) {
   const safe = esc(tip);
+  // sym 必须显式传：class 名与 symbol id 并非一一对应
+  // （ci-in 对应 ic-cloud / ic-cloud-check 两个；ci-out → ic-cloud-alert）
   return '<svg class="ci-icon ' + cls + '" role="img" tabindex="0" data-tip="' + safe + '">'
-    + '<title>' + safe + '</title><use href="#' + cls.replace(/^ci-/, 'ic-') + '"/></svg>';
+    + '<title>' + safe + '</title><use href="#' + (sym || cls.replace(/^ci-/, 'ic-')) + '"/></svg>';
 }
 function localCell(t) {
-  if (t.local) return iconTip('ci-disk', '已在本地');
-  if (t.status === 'failed') return iconTip('ci-disk-alert', '下载失败' + (t.error ? '：' + t.error : ''));
-  return iconTip('ci-disk-alert', '还没下载到本地');
+  if (t.local) return iconTip('ci-disk', '已在本地', 'ic-disk');
+  if (t.status === 'failed') return iconTip('ci-disk-alert', '下载失败' + (t.error ? '：' + t.error : ''), 'ic-disk-alert');
+  return iconTip('ci-disk-alert', '还没下载到本地', 'ic-disk-alert');
 }
 
 /** 云盘状态：白云=在云盘；白云+绿勾=在云盘且本地已有；红云+白感叹号=不在云盘；灰云=未知 */
 function cloudCell(t) {
   const tip = cloudTip();
   if (t.in_cloud === true) {
-    return t.local ? iconTip('ci-in', '在云盘，本地也有' + tip)
-                   : iconTip('ci-in', '在云盘（本地还没下载）' + tip);
+    return t.local ? iconTip('ci-in', '在云盘，本地也有' + tip, 'ic-cloud-check')
+                   : iconTip('ci-in', '在云盘（本地还没下载）' + tip, 'ic-cloud');
   }
-  if (t.in_cloud === false) return iconTip('ci-out', '不在云盘' + tip);
-  return iconTip('ci-unknown', '云盘数据读取中，稍后自动刷新');
+  if (t.in_cloud === false) {
+    // 不在云盘 → 图标可点：弹「立即下载并转存云盘」（本地已有则直接上传）
+    if (t.id == null) return iconTip('ci-out', '不在云盘' + tip, 'ic-cloud-alert');
+    return '<svg class="ci-icon ci-out ci-clickable" role="button" tabindex="0"'
+      + ' data-cloud-add="' + t.id + '" data-cloud-local="' + (t.local ? '1' : '') + '"'
+      + ' data-cloud-title="' + esc(t.title || '') + '">'
+      + '<title>不在云盘' + tip + ' —— 点一下可立即' + (t.local ? '上传' : '下载并转存') + '到云盘</title>'
+      + '<use href="#ic-cloud-alert"/></svg>';
+  }
+  return iconTip('ci-unknown', '云盘数据读取中，稍后自动刷新', 'ic-cloud');
 }
 
 /** 在不在（网易云）歌单里：白=在；红+白感叹号=不在；灰=认不出是哪首（没法判断） */
 function playlistCell(t) {
-  if (t.in_playlist === true) return iconTip('ci-list', '在你的歌单里');
+  if (t.in_playlist === true) return iconTip('ci-list', '在你的歌单里', 'ic-list');
   if (t.in_playlist === false) {
     return '<svg class="ci-icon ci-list ci-clickable" data-addpl="1" role="button" tabindex="0">'
       + '<title>不在你的任何歌单里 —— 点一下可以加到歌单</title>'
       + '<use href="#ic-list-out"/></svg>';
   }
-  return iconTip('ci-unknown', '认不出这是哪首歌（云盘条目还没匹配到正式曲目），判断不了在不在歌单里');
+  return iconTip('ci-unknown', '认不出这是哪首歌（云盘条目还没匹配到正式曲目），判断不了在不在歌单里', 'ic-list');
 }
 
 /* ---------- 筛选片 ---------- */
@@ -369,20 +379,23 @@ function paintChips(group, state, counts) {
   });
 }
 /* ================= 新增：状态图标图例 ================= */
+// [class, symbol, 名称, 说明]
+// symbol 必须显式写：class 名与 symbol id 不是一一对应
 const LEGEND = [
-  ['ci-disk', '已在本地', '这首歌已经下载到本地曲库'],
-  ['ci-disk-alert', '本地没有', '还没下载，或下载失败（悬停/点击看具体原因）'],
-  ['ci-in', '在云盘', '已上传到网易云云盘'],
-  ['ci-out', '不在云盘', '云盘里还没有这首歌'],
-  ['ci-list', '在歌单里', '这首歌在你的（已勾选的）歌单里'],
-  ['ci-list-out', '不在歌单', '不在任何歌单里 —— 点一下可加到歌单'],
-  ['ci-unknown', '判断不了', '云盘条目还没匹配到正式曲目，认不出是哪首歌'],
+  ['ci-disk', 'ic-disk', '已在本地', '这首歌已经下载到本地曲库'],
+  ['ci-disk-alert', 'ic-disk-alert', '本地没有', '还没下载，或下载失败（悬停/点击看具体原因）'],
+  ['ci-in', 'ic-cloud', '在云盘', '已上传到网易云云盘（本地可能还没下载）'],
+  ['ci-in', 'ic-cloud-check', '在云盘且本地也有', '既在云盘，本地也已经下载好'],
+  ['ci-out', 'ic-cloud-alert', '不在云盘', '云盘里还没有这首歌 —— 点一下可以立即下载并转存'],
+  ['ci-list', 'ic-list', '在歌单里', '这首歌在你的（已勾选的）歌单里'],
+  ['ci-list-out', 'ic-list-out', '不在歌单', '不在任何歌单里 —— 点一下可加到歌单'],
+  ['ci-unknown', 'ic-cloud', '判断不了', '云盘条目还没匹配到正式曲目，认不出是哪首歌'],
 ];
 function openLegend() {
   const body = '<div class="legend">' + LEGEND.map(function (x) {
     return '<div class="lg-row"><svg class="ci-icon ' + x[0] + '" role="img">'
-      + '<use href="#' + x[0].replace(/^ci-/, 'ic-') + '"/></svg>'
-      + '<div><b>' + x[1] + '</b><small>' + x[2] + '</small></div></div>';
+      + '<use href="#' + x[1] + '"/></svg>'
+      + '<div><b>' + x[2] + '</b><small>' + x[3] + '</small></div></div>';
   }).join('') + '</div>'
     + '<p class="hint" style="margin-top:16px">小图标尺寸固定、排成一竖线，所以每一列都能上下对比。'
     + '触屏设备点一下图标也会弹提示（悬停提示在手机上无法触发）。</p>';
@@ -427,11 +440,7 @@ function tcRender(s) {
   // 面板内容
   const box = document.getElementById('tc-body');
   if (!box) return;
-  if (!rows.some(function (r) { return r.total; }) && !running) {
-    box.innerHTML = '<div class="tc-empty">当前没有进行中的任务。<br>'
-      + '可以在首页「手动操作」或各页面发起。</div>';
-    return;
-  }
+  const idleAll = !rows.some(function (r) { return r.total; }) && !running;
   box.innerHTML = rows.map(function (r) {
     const busy = r.o.busy || r.left;
     const sub = r.total
@@ -446,6 +455,8 @@ function tcRender(s) {
           + '<a class="btn mini" href="' + r.d.href + '">查看 ' + r.failed + ' 个失败</a></div>' : '')
       + '</div>';
   }).join('')
+  + (idleAll ? '<div class="hint" style="margin-top:10px;text-align:center">'
+      + '当前没有排队中的任务。可到首页「手动操作」发起同步或下载。</div>' : '')
   + (failedAll ? '<div class="btn-row" style="margin-top:10px">'
       + '<a class="btn mini" href="/download?filter=failed">失败重试中心</a></div>' : '');
 }
@@ -475,6 +486,33 @@ document.getElementById('tc-fab').onclick = function () { tcToggle(); };
 document.getElementById('tc-refresh').onclick = function () { tcPoll(); toast('已刷新', 'ok'); };
 document.getElementById('tc-close').onclick = function () { tcToggle(false); };
 document.getElementById('legend-btn').onclick = openLegend;
+
+/* 云盘图标（不在云盘）→ 立即下载并转存云盘；本地已有则直接上传 */
+document.addEventListener('click', async function (e) {
+  const el = e.target.closest && e.target.closest('[data-cloud-add]');
+  if (!el) return;
+  e.preventDefault();
+  const tid = el.getAttribute('data-cloud-add');
+  const title = el.getAttribute('data-cloud-title') || ('#' + tid);
+  const local = el.getAttribute('data-cloud-local') === '1';
+  const msg = local
+    ? '「' + title + '」已在本地，是否立即上传到云盘？'
+    : '「' + title + '」不在云盘，是否立即下载并转存到云盘？\n（先加入下载队列，下载完成后自动上传）';
+  if (!confirm(msg)) return;
+  el.style.opacity = '.4';
+  try {
+    if (local) {
+      const r = await jsonReq('/api/cloud/upload/' + tid, 'POST');
+      toast(r.ok ? '已加入上传队列' : (r.data.error || r.error || '上传入队失败'), r.ok ? 'ok' : 'err');
+    } else {
+      const r = await jsonReq('/api/tracks/' + tid + '/download', 'POST', {to_cloud: true});
+      toast(r.ok ? '已加入下载队列，完成后自动转存云盘'
+                 : (r.data.error || r.error || '下载入队失败'), r.ok ? 'ok' : 'err');
+    }
+  } finally {
+    setTimeout(function () { el.style.opacity = ''; }, 1500);
+  }
+});
 
 /* 全局：点击带 data-tip 的状态图标 → 弹提示（触屏无法悬停）；关后台→暂停轮询 */
 document.addEventListener('click', function (e) {

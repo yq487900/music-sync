@@ -21,7 +21,7 @@ class Task:
     """一个可暂停 / 取消的任务单元"""
 
     def __init__(self, kind: str, track_id: int, title: str = "", artist: str = "",
-                 source_pref: str = "", album: str = "") -> None:
+                 source_pref: str = "", album: str = "", to_cloud: bool = False) -> None:
         self.kind = kind                  # download / upload
         self.track_id = int(track_id)
         self.title = title
@@ -40,6 +40,8 @@ class Task:
         self._resume = asyncio.Event()
         self._resume.set()
         self.canceled = False
+        # 单次请求的「下载完成后转存云盘」标记（不影响全局 auto_upload 配置）
+        self.to_cloud = bool(to_cloud)
 
     # ---------------- 控制 ----------------
     @property

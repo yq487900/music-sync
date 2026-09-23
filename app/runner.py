@@ -85,7 +85,8 @@ async def _download_runner(task: Task, cfg: Dict[str, Any]) -> None:
         task.done_with(source=res.get("source") or "", level=res.get("level") or "")
     finally:
         db.close()
-    if bool((cfg.get("cloud") or {}).get("auto_upload")):
+    # 全局 auto_upload，或本次请求勾了「下载并转存云盘」
+    if bool((cfg.get("cloud") or {}).get("auto_upload")) or getattr(task, "to_cloud", False):
         enqueue_upload(task.track_id)
 
 
@@ -523,8 +524,9 @@ def enqueue_downloads(cfg: Dict[str, Any], only_ids: Optional[List[int]] = None,
 
 
 def enqueue_download_one(track_id: int, cfg: Dict[str, Any],
-                         source_pref: Optional[str] = None) -> Task:
-    """单首下载（不受勾选状态限制）"""
+                         source_pref: Optional[str] = None,
+                         to_cloud: bool = False) -> Task:
+    """单首下载（不受勾选状态限制）；to_cloud=True 时下载完成后自动上传云盘"""
     apply_config(cfg)
     db = SessionLocal()
     try:
@@ -537,7 +539,7 @@ def enqueue_download_one(track_id: int, cfg: Dict[str, Any],
             db.commit()
         return DOWNLOADS.add(Task("download", tr.id, title=tr.title or "",
                                   artist=tr.artist or "", album=tr.album or "",
-                                  source_pref=pref))
+                                  source_pref=pref, to_cloud=to_cloud))
     finally:
         db.close()
 
