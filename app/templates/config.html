@@ -107,6 +107,22 @@
           排队下载 {{ (cfg.monitor.last_result or {}).get('download', 0) }} 首 /
           补传 {{ (cfg.monitor.last_result or {}).get('upload', 0) }} 首。{% endif %}</span>
       </div>
+      <div class="field">
+        <label for="monitor_interval">检查间隔</label>
+        <select id="monitor_interval" name="monitor_interval">
+          <option value="1" {% if (cfg.monitor.interval or 2)|int == 1 %}selected{% endif %}>1 分钟（最快）</option>
+          <option value="2" {% if (cfg.monitor.interval or 2)|int == 2 %}selected{% endif %}>2 分钟（推荐）</option>
+          <option value="5" {% if (cfg.monitor.interval or 2)|int == 5 %}selected{% endif %}>5 分钟</option>
+          <option value="10" {% if (cfg.monitor.interval or 2)|int == 10 %}selected{% endif %}>10 分钟（省请求）</option>
+        </select>
+        <span class="hint">每隔这么久查一次「我的歌单有没有新歌」。
+          一次检查只发 1 个请求（比对歌单的曲目数），很轻量；
+          网易云本身没有推送机制，所以只能轮询 —— 间隔越短，越接近「一点收藏就下载」。</span>
+      </div>
+      <div class="btn-row">
+        <button type="button" class="btn sm" id="btn-monitor-run"><svg><use href="#ic-refresh"/></svg>立即检查一次</button>
+        <span class="hint" id="monitor-run-hint" style="align-self:center"></span>
+      </div>
     </div>
 
     <div class="field">
@@ -183,6 +199,11 @@
     支持洛雪（LX）兼容的 JS 音源脚本，可填脚本链接或直接粘贴脚本内容。
   </p>
 
+  <div class="btn-row" style="margin:0 0 14px">
+    <button class="btn sm" id="btn-src-check-all"><svg><use href="#ic-refresh"/></svg>全部检测</button>
+    <button class="btn sm" id="btn-src-update-all"><svg><use href="#ic-down"/></svg>全部更新</button>
+    <span class="hint" id="src-all-hint" style="align-self:center"></span>
+  </div>
   <div id="src-list"></div>
 
   <details class="adv" id="src-add">
@@ -297,6 +318,7 @@ function readCfgForm(f) {
     monitor_on: chk('monitor_on'),
     monitor_mode: f.monitor_mode.value,
     monitor_batch: num('monitor_batch', 20),
+    monitor_interval: num('monitor_interval', 2),
     sync_time: f.sync_time.value
   };
 }
@@ -387,6 +409,42 @@ function srcEditForm(e) {
       <button class="btn sm primary" data-act="save">保存</button>
     </div>`;
 }
+
+/** 「全部检测」/「全部更新」：后端顺序挨个跑，可能要几十秒，所以超时给足 */
+async function srcBatch(kind, btn) {
+  const hint = document.getElementById('src-all-hint');
+  setBusy(btn, true);
+  if (hint) hint.textContent = kind === 'check-all' ? '正在逐个检测…' : '正在逐个更新…';
+  const r = await jsonReq('/api/sources/' + kind, 'POST', {}, 600000);
+  setBusy(btn, false);
+  if (hint) hint.textContent = '';
+  if (!r.ok) { toast(r.data.error || '操作失败', 'err'); return; }
+  const d = r.data;
+  const bad = (d.failed || []).length;
+  const head = kind === 'check-all'
+    ? `检测完成：${d.ok}/${d.total} 个可用`
+    : `更新完成：${d.updated} 个` + (d.skipped ? `（${d.skipped} 个没链接、已跳过）` : '');
+  const more = bad ? `，${bad} 个失败：${d.failed[0].name}——${d.failed[0].msg}` : '';
+  toast(head + more, bad ? 'err' : 'ok');
+  loadSources();
+}
+document.getElementById('btn-src-check-all').onclick = (e) => srcBatch('check-all', e.currentTarget);
+document.getElementById('btn-src-update-all').onclick = (e) => srcBatch('update-all', e.currentTarget);
+
+/** 「立即检查一次」：先刷歌单索引，再跑一轮监控（不等待下一次定时） */
+document.getElementById('btn-monitor-run').onclick = async (e) => {
+  const btn = e.currentTarget;
+  const hint = document.getElementById('monitor-run-hint');
+  setBusy(btn, true);
+  if (hint) hint.textContent = '正在刷歌单索引并检查…';
+  const r = await jsonReq('/api/monitor/run', 'POST', {}, 300000);
+  setBusy(btn, false);
+  if (hint) hint.textContent = '';
+  if (!r.ok) { toast(r.data.error || '检查失败', 'err'); return; }
+  const d = r.data;
+  if (d.skipped) { toast(String(d.skipped), 'err'); return; }
+  toast(`检查完成：新排队下载 ${d.download || 0} 首 / 补传云盘 ${d.upload || 0} 首`);
+};
 
 async function loadSources() {
   const r = await jsonReq('/api/sources');

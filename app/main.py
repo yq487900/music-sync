@@ -1606,6 +1606,73 @@ async def api_update_source(sid: str):
     return {"source": _source_view(entry)}
 
 
+@app.post("/api/monitor/run")
+async def api_monitor_run():
+    """手动跑一次歌单监控（配置页「立即检查一次」）。
+    先强制刷一次歌单索引，否则刚加进歌单的歌手上的内存索引里还没有。"""
+    from app.runner import monitor_playlists
+    from app.scheduler import refresh_playlist_index
+    cfg = config.load()
+    if not bool((cfg.get("monitor") or {}).get("on")):
+        return JSONResponse({"error": "「歌单监控」开关是关的，先在配置页打开"}, status_code=400)
+    try:
+        await refresh_playlist_index()
+    except Exception:  # noqa: BLE001
+        pass          # 索引刷不动也继续，用现有索引跑一次总比不跑强
+    try:
+        return await monitor_playlists(cfg_in=cfg)
+    except Exception as e:  # noqa: BLE001
+        return JSONResponse({"error": "%s: %s" % (type(e).__name__, e)}, status_code=500)
+
+
+@app.post("/api/sources/check-all")
+async def api_check_sources_all():
+    """逐个检测所有音源（顺序执行，避免并发压垮 JS 沙箱）；结果写回配置"""
+    cfg = config.load()
+    entries = lxsource.list_sources(cfg)
+    ok, failed = 0, []
+    for entry in entries:
+        name = str(entry.get("name") or entry.get("id") or "?")
+        script = str(entry.get("script") or "")
+        if not script.strip():
+            failed.append({"name": name, "msg": "没有脚本内容"})
+            continue
+        try:
+            data = await lxsource.LxRunner.check(script)
+            lxsource.mark_checked(entry, data)
+            if entry.get("ok"):
+                ok += 1
+            else:
+                failed.append({"name": name, "msg": str(entry.get("note") or "检测未通过")})
+        except Exception as e:  # noqa: BLE001
+            failed.append({"name": name, "msg": "%s: %s" % (type(e).__name__, e)})
+    config.save(cfg)
+    return {"total": len(entries), "ok": ok, "failed": failed}
+
+
+@app.post("/api/sources/update-all")
+async def api_update_sources_all():
+    """挨个按记录的音源链接重新拉脚本并检测；没记链接的跳过"""
+    cfg = config.load()
+    entries = lxsource.list_sources(cfg)
+    updated, skipped, failed = 0, 0, []
+    for entry in entries:
+        name = str(entry.get("name") or entry.get("id") or "?")
+        url = str(entry.get("url") or "")
+        if not url:
+            skipped += 1
+            continue
+        try:
+            entry["script"] = await lxsource.fetch_script(url)
+            data = await lxsource.LxRunner.check(entry["script"])
+            lxsource.mark_checked(entry, data)
+            updated += 1
+        except Exception as e:  # noqa: BLE001
+            failed.append({"name": name, "msg": "%s: %s" % (type(e).__name__, e)})
+    config.save(cfg)
+    return {"total": len(entries), "updated": updated, "skipped": skipped, "failed": failed}
+
+
 # ------------------------------------------------------------- 其它
 @app.get("/api/health")
 async def api_health():

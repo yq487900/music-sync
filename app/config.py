@@ -35,7 +35,7 @@ DEFAULT: Dict[str, Any] = {
     # 网易云云盘（calibrate=上传完成后按歌单数据校准本地封面/专辑/歌词）
     "cloud": {"auto_upload": False, "calibrate": True},
     # 歌单监控：on=开关；mode=new 从现在开始监控 / full 全量扫描补齐后再监控
-    "monitor": {"on": False, "mode": "new", "since": 0, "batch": 20,
+    "monitor": {"on": False, "mode": "new", "since": 0, "batch": 20, "interval": 2,
                 "last_run": "", "last_result": {}},
     # 曲库整理
     "organize": {"batch": 20},      # 一键批量刮削每轮处理的文件数
@@ -86,10 +86,12 @@ def load() -> Dict[str, Any]:
     cfg["cloud"].setdefault("calibrate", True)
     if not isinstance(cfg.get("monitor"), dict):
         cfg["monitor"] = {"on": False, "mode": "new", "since": 0, "batch": 20}
+        cfg["monitor"].setdefault("interval", 2)
     cfg["monitor"].setdefault("on", False)
     cfg["monitor"].setdefault("mode", "new")
     cfg["monitor"].setdefault("since", 0)
     cfg["monitor"].setdefault("batch", 20)
+    cfg["monitor"].setdefault("interval", 2)
     for key in ("download_dir",):
         try:
             Path(cfg[key]).mkdir(parents=True, exist_ok=True)

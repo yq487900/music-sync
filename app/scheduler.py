@@ -135,6 +135,26 @@ def reschedule() -> list:
         scheduler.add_job(run_download, "cron", hour=h, minute=(m + 5) % 60, id="auto_download")
         if cloud.get("auto_upload"):
             scheduler.add_job(run_upload, "cron", hour=h, minute=(m + 20) % 60, id="auto_upload")
+    # 歌单索引 + 歌单监控：按配置的「检查间隔」跑（默认 2 分钟）。
+    # 两者同频：索引负责发现「哪个歌单变了」，监控负责把新歌排队下载。
+    # 云盘索引保持 10 分钟（它只管云盘列表，开销比歌单大）。
+    mon = cfg.get("monitor") or {}
+    try:
+        iv = max(1, min(60, int(mon.get("interval") or 2)))
+    except (TypeError, ValueError):
+        iv = 2
+    for job_id in ("playlist_monitor", "playlist_index", "cloud_index"):
+        try:
+            scheduler.remove_job(job_id)
+        except Exception:  # noqa: BLE001
+            pass
+    now = datetime.datetime.now()
+    scheduler.add_job(refresh_playlist_index, "interval", minutes=iv, id="playlist_index",
+                      replace_existing=True, next_run_time=now + datetime.timedelta(seconds=5))
+    scheduler.add_job(run_monitor, "interval", minutes=iv, id="playlist_monitor",
+                      replace_existing=True, next_run_time=now + datetime.timedelta(seconds=15))
+    scheduler.add_job(refresh_cloud_index, "interval", minutes=10, id="cloud_index",
+                      replace_existing=True, next_run_time=now + datetime.timedelta(seconds=20))
     # next_run_time 仅在调度器启动后才有值
     return [(j.id, str(getattr(j, "next_run_time", None) or "-")) for j in scheduler.get_jobs()]
 
@@ -195,16 +215,5 @@ def start_scheduler() -> None:
     reschedule()
     if not scheduler.running:
         scheduler.start()
-    # 云盘索引：起来 20 秒后拉一次（等 ncm-api 就绪），之后每 10 分钟刷新
-    # （页面只读内存，永远不等它；打开歌单时还会额外强制刷一次）
-    scheduler.add_job(refresh_cloud_index, "interval", minutes=10, id="cloud_index",
-                      replace_existing=True,
-                      next_run_time=datetime.datetime.now() + datetime.timedelta(seconds=20))
-    # 歌单索引（在不在歌单里 / 监控用）：30 分钟一次，只重拉变过的歌单
-    scheduler.add_job(refresh_playlist_index, "interval", minutes=30, id="playlist_index",
-                      replace_existing=True,
-                      next_run_time=datetime.datetime.now() + datetime.timedelta(seconds=35))
-    # 歌单监控：每 10 分钟看一次（开关关着就什么都不做）
-    scheduler.add_job(run_monitor, "interval", minutes=10, id="playlist_monitor",
-                      replace_existing=True,
-                      next_run_time=datetime.datetime.now() + datetime.timedelta(minutes=1))
+    # 云盘索引 / 歌单索引 / 歌单监控 的周期任务统一在 reschedule() 里注册，
+    # 这样配置页改了「检查间隔」保存后立即生效，无需重启。
