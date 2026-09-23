@@ -562,30 +562,40 @@ document.addEventListener('click', function (e) {
 });
 
 /* 云盘图标（不在云盘）→ 立即下载并转存云盘；本地已有则直接上传 */
-document.addEventListener('click', async function (e) {
+document.addEventListener('click', function (e) {
   const el = e.target.closest && e.target.closest('[data-cloud-add]');
   if (!el) return;
   e.preventDefault();
   const tid = el.getAttribute('data-cloud-add');
   const title = el.getAttribute('data-cloud-title') || ('#' + tid);
   const local = el.getAttribute('data-cloud-local') === '1';
-  const msg = local
-    ? '「' + title + '」已在本地，是否立即上传到云盘？'
-    : '「' + title + '」不在云盘，是否立即下载并转存到云盘？\n（先加入下载队列，下载完成后自动上传）';
-  if (!confirm(msg)) return;
-  el.style.opacity = '.4';
-  try {
-    if (local) {
-      const r = await jsonReq('/api/cloud/upload/' + tid, 'POST');
-      toast(r.ok ? '已加入上传队列' : (r.data.error || r.error || '上传入队失败'), r.ok ? 'ok' : 'err');
-    } else {
-      const r = await jsonReq('/api/tracks/' + tid + '/download', 'POST', {to_cloud: true});
-      toast(r.ok ? '已加入下载队列，完成后自动转存云盘'
-                 : (r.data.error || r.error || '下载入队失败'), r.ok ? 'ok' : 'err');
-    }
-  } finally {
-    setTimeout(function () { el.style.opacity = ''; }, 1500);
-  }
+  const back = openModal('转存到网易云云盘', ''
+    + '<div style="padding:6px 2px">'
+    + '<p style="margin:0 0 4px;font-size:14.5px"><strong>' + esc(title) + '</strong></p>'
+    + '<p style="margin:0 0 18px;color:var(--text-dim);font-size:13px;line-height:1.7">'
+    + (local ? '这首歌已在本地，是否立即上传到云盘？'
+              : '这首歌不在云盘。是否立即下载，并在下载完成后自动转存到云盘？')
+    + '</p>'
+    + '<div class="btn-row" style="margin-top:0;justify-content:flex-end">'
+    + '<button class="btn" data-m="close">取消</button>'
+    + '<button class="btn primary" data-m="go">'
+    + (local ? '上传到云盘' : '下载并转存') + '</button>'
+    + '</div></div>');
+  back.querySelector('[data-m=go]').onclick = async function () {
+    const btn = this;
+    setBusy(btn, true);
+    try {
+      if (local) {
+        const r = await jsonReq('/api/cloud/upload/' + tid, 'POST');
+        toast(r.ok ? '已加入上传队列' : (r.data.error || r.error || '上传入队失败'), r.ok ? 'ok' : 'err');
+      } else {
+        const r = await jsonReq('/api/tracks/' + tid + '/download', 'POST', {to_cloud: true});
+        toast(r.ok ? '已加入下载队列，完成后自动转存云盘'
+                   : (r.data.error || r.error || '下载入队失败'), r.ok ? 'ok' : 'err');
+      }
+      back.remove();
+    } finally { setBusy(btn, false); }
+  };
 });
 
 /* 全局：点击带 data-tip 的状态图标 → 弹提示（触屏无法悬停）；关后台→暂停轮询 */

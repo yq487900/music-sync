@@ -30,9 +30,11 @@ from jinja2 import Environment, FileSystemLoader
 # ---------------------------------------------------------------- 缓存
 # 账号歌单 / 歌单曲目都是低频变化的远端数据，缓存几分钟避免翻页反复请求
 _CACHE: dict = {}
+_SONG_CACHE: dict = {}   # 歌曲详情缓存（独立，避免占用 _CACHE 的 24 键配额）
 _TTL_PLAYLISTS = 120
 _TTL_TRACKS = 600
 _TTL_CLOUD = 30
+_TTL_SONG_DETAIL = 3600    # 歌曲详情（标题/歌手/封面）变化极低频，缓存 1 小时
 
 
 def _cache_get(key: str, ttl: int):
@@ -174,26 +176,38 @@ async def _playlist_tracks(pid: int, cfg: dict) -> dict:
         name = str(pl.get("name") or pid)
         cover = str(pl.get("coverImgUrl") or "")
         ids = await ncm.playlist_track_ids(pid, pl)
+        # 歌曲详情长缓存：标题/歌手/封面几乎不变，缓存 1 小时；
+        # 刷新时只有「新加入歌单」的歌才需要拉详情，其余命中缓存 → 秒开
         rows = []
-        # 分批并发拉详情：原先串行 10 批≈ 8 秒，并发后 ≈ 2 秒
-        _chunks = [ids[i:i + 300] for i in range(0, len(ids), 300)]
-        _batches = await asyncio.gather(*[ncm.song_detail(c) for c in _chunks]) if _chunks else []
-        for _b in _batches:
-            for s in _b:
-                try:
-                    sid = int(s["id"])
-                except (KeyError, TypeError, ValueError):
-                    continue
-                ar = [a.get("name") for a in (s.get("ar") or s.get("artists") or []) if a.get("name")]
-                al = s.get("al") or s.get("album") or {}
-                rows.append({
-                    "sid": sid,
-                    "title": str(s.get("name") or sid),
-                    "artist": " / ".join(ar) or "未知歌手",
-                    "album": str(al.get("name") or ""),
-                    "cover": str(al.get("picUrl") or ""),
-                    "duration": int((s.get("dt") or 0) // 1000),
-                })
+        _missing = []
+        for sid in ids:
+            dk = str(sid)
+            hit = _SONG_CACHE.get(dk)
+            if hit and time.time() - hit[0] < _TTL_SONG_DETAIL:
+                rows.append(dict(hit[1]))
+            else:
+                _missing.append(sid)
+        if _missing:
+            _chunks = [_missing[i:i + 300] for i in range(0, len(_missing), 300)]
+            _batches = await asyncio.gather(*[ncm.song_detail(c) for c in _chunks]) if _chunks else []
+            for _b in _batches:
+                for s in _b:
+                    try:
+                        sid = int(s["id"])
+                    except (KeyError, TypeError, ValueError):
+                        continue
+                    ar = [a.get("name") for a in (s.get("ar") or s.get("artists") or []) if a.get("name")]
+                    al = s.get("al") or s.get("album") or {}
+                    one = {
+                        "sid": sid,
+                        "title": str(s.get("name") or sid),
+                        "artist": " / ".join(ar) or "未知歌手",
+                        "album": str(al.get("name") or ""),
+                        "cover": str(al.get("picUrl") or ""),
+                        "duration": int((s.get("dt") or 0) // 1000),
+                    }
+                    _SONG_CACHE[str(sid)] = (time.time(), one)
+                    rows.append(one)
         order = {sid: i for i, sid in enumerate(ids)}
         rows.sort(key=lambda r: order.get(r["sid"], 10 ** 9))
         data = {"id": pid, "name": name, "cover": cover, "tracks": rows}
@@ -1160,11 +1174,13 @@ async def api_cloud(page: int = 1, size: int = 20, q: str = "", cover: str = "al
         return True
 
     rows = [x for x in rows if keep(x)]
-    # 排序：sort=""=云盘原顺序；title=歌名；artist=歌手（中文按 Unicode 码位，非拼音）
+    # 排序：sort=""=云盘原顺序；time=加入云盘顺序（即原顺序）；title=歌名；artist=歌手
     _csrt = (sort or "").lower()
     if _csrt in ("title", "artist"):
         rows.sort(key=lambda x: str(x.get(_csrt) or "").lower(),
                   reverse=(order or "asc").lower() == "desc")
+    elif _csrt == "time":
+        rows.reverse() if (order or "asc").lower() == "desc" else None
     total = len(rows)
     pages = max(1, math.ceil(total / size)) if total else 1
     out = _slice(rows, page, size)
@@ -1222,6 +1238,8 @@ async def api_cloud_local(page: int = 1, size: int = 20, q: str = "",
     if _lsrt in ("title", "artist"):
         items.sort(key=lambda x: str(x.get(_lsrt) or "").lower(),
                    reverse=(order or "asc").lower() == "desc")
+    elif _lsrt == "time":
+        items.sort(key=lambda x: int(x.get("id") or 0), reverse=(order or "asc").lower() == "desc")
     out = _slice(items, page, size)
     return {**out, "q": q}
 

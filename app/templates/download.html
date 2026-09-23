@@ -215,9 +215,11 @@ function renderQueue(q) {
   pill.innerHTML = '<span class="dot-i"></span>' +
     (q.busy ? `进行 ${q.downloading} · 排队 ${q.queued}${q.paused ? ' · 暂停 ' + q.paused : ''}`
             : `空闲（完成 ${q.done} · 失败 ${q.failed}）`);
-  const tasks = (q.tasks || []).slice().reverse();
+  // 已完成 / 已取消 的任务不显示（自动清空），只保留失败的和正在跑的
+  const tasks = (q.tasks || []).slice().reverse()
+    .filter(t => !['done', 'canceled'].includes(t.state));
   if (!tasks.length) {
-    box.innerHTML = '<div class="empty">当前没有下载任务</div>';
+    box.innerHTML = '<div class="empty">没有进行中或失败的任务</div>';
     return;
   }
   box.innerHTML = tasks.map(t => {
@@ -242,6 +244,10 @@ function renderQueue(q) {
           ${t.error ? `<span style="color:var(--err)">${esc(t.error)}</span>` : ''}
         </span>
         <span class="right">
+          ${t.state === 'failed'
+            ? `<button class="btn mini" data-q="retry">重试</button>
+               <button class="btn mini" data-q="cancel">移除</button>`
+            : ''}
           ${t.state === 'paused' ? '<button class="btn mini" data-q="resume">继续</button>' : ''}
           ${t.state === 'downloading' ? '<button class="btn mini" data-q="pause">暂停</button>' : ''}
           ${['queued', 'downloading', 'paused'].includes(t.state)
@@ -252,6 +258,14 @@ function renderQueue(q) {
   box.querySelectorAll('[data-q]').forEach(b => {
     b.onclick = async () => {
       const tid = b.closest('.trk').dataset.tid;
+      if (b.dataset.q === 'retry') {
+        // 重试 = 重新入队下载（会沿用该曲目的音源偏好）
+        const r = await jsonReq(`/api/tracks/${tid}/download`, 'POST');
+        if (!r.ok) { toast(r.data.error || '重试失败', 'err'); return; }
+        toast('已重新加入下载队列', 'ok');
+        setTimeout(pollQueue, 300);
+        return;
+      }
       const r = await jsonReq(`/api/queue/${tid}/${b.dataset.q}`, 'POST');
       if (!r.ok) { toast(r.data.error || '操作失败', 'err'); return; }
       setTimeout(pollQueue, 300);
