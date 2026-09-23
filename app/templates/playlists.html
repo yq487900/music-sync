@@ -6,8 +6,8 @@
   <h1>我的歌单</h1>
   <p class="sub">勾选左侧方框加入同步；点歌单可以查看里面的歌曲。</p>
   <div class="btn-row">
-    <button class="btn primary" id="btn-sync"><svg><use href="#ic-refresh"/></svg>立即同步歌单</button>
-    <button class="btn" id="btn-reload">刷新列表</button>
+    <button class="btn" id="btn-reload"><svg><use href="#ic-refresh"/></svg>刷新列表</button>
+    <button class="btn primary push" id="btn-sync"><svg><use href="#ic-refresh"/></svg>立即同步歌单</button>
   </div>
   <div class="bar" id="bar" style="display:none"><i></i></div>
   <p class="hint" id="progress" style="display:none"></p>
@@ -26,7 +26,7 @@
       </p>
       <div class="field"><input type="text" id="pid" placeholder="歌单 ID"></div>
       <div class="field"><input type="text" id="pname" placeholder="备注名（可留空）"></div>
-      <button class="btn" id="btn-add">添加并同步</button>
+      <button class="btn primary" id="btn-add">添加并同步</button>
     </div>
   </details>
 </div>

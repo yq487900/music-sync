@@ -20,16 +20,20 @@
     <svg><use href="#ic-search"/></svg>
     <input id="qsearch" placeholder="搜歌名 / 歌手 / 专辑 / 文件名">
   </div>
-  <div class="btn-row" style="margin:12px 0 4px">
-    <button class="btn mini" id="btn-select-page">勾选本页</button>
-    <button class="btn mini" id="btn-unselect-page">取消本页</button>
-    <button class="btn mini" id="btn-select-all">全部勾选</button>
-    <button class="btn mini" id="btn-unselect-all">全部取消</button>
-    <button class="btn" id="btn-refresh"><svg><use href="#ic-refresh"/></svg>刷新</button>
-    <button class="btn primary" id="btn-restore-sel"><svg><use href="#ic-refresh"/></svg>恢复勾选的</button>
-    <button class="btn mini" id="btn-restore-all">全部恢复</button>
-    <button class="btn" id="btn-purge-sel">清空勾选的</button>
-    <button class="btn mini" id="btn-purge-all">全部清空</button>
+  <div class="toolrow">
+    <button class="btn sm" id="btn-refresh"><svg><use href="#ic-refresh"/></svg>刷新</button>
+    <span class="tb-push"></span>
+    <button class="btn sm" id="btn-select-page">勾选本页</button>
+    <button class="btn sm" id="btn-unselect-page">取消本页</button>
+    <span class="tb-sep"></span>
+    <button class="btn sm" id="btn-select-all">全部勾选</button>
+    <button class="btn sm" id="btn-unselect-all">全部取消</button>
+    <span class="tb-sep"></span>
+    <button class="btn sm primary" id="btn-restore-sel"><svg><use href="#ic-restore"/></svg>恢复勾选的</button>
+    <button class="btn sm" id="btn-restore-all">全部恢复</button>
+    <span class="tb-sep"></span>
+    <button class="btn sm" id="btn-purge-sel"><svg><use href="#ic-trash"/></svg>清空勾选的</button>
+    <button class="btn sm" id="btn-purge-all">全部清空</button>
   </div>
   <div id="list"><div class="empty"><div class="big">⏳</div>正在读取回收站…</div></div>
   <div id="pager"></div>

@@ -126,7 +126,9 @@ body {
 /* 按钮内的小图标（与导航图标同一套线性风格） */
 .btn svg { width: 15px; height: 15px; flex: 0 0 15px; fill: none; stroke: currentColor;
   stroke-width: 1.9; stroke-linecap: round; stroke-linejoin: round; }
+.btn.mini { padding: 7px 13px; font-size: 12.5px; border-radius: 11px; gap: 6px; }
 .btn.mini svg { width: 13px; height: 13px; flex-basis: 13px; }
+.btn.mini.loading::after { width: 12px; height: 12px; margin: -6px 0 0 -6px; }
 
 /* ---------- 卡片 ---------- */
 .card {

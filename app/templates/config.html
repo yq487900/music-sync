@@ -166,10 +166,10 @@
     </details>
 
     <div class="btn-row" style="margin-top:20px">
-      <button type="submit" class="btn primary">保存配置</button>
       <a class="btn" href="/playlists">去选择歌单</a>
       <button type="button" class="btn" id="btn-export-cfg">导出配置</button>
       <button type="button" class="btn" id="btn-import-cfg">导入配置</button>
+      <button type="submit" class="btn primary push">保存配置</button>
       <input type="file" id="file-cfg" accept="application/json,.json" hidden>
     </div>
   </form>
@@ -383,8 +383,8 @@ function srcEditForm(e) {
       <textarea class="e-script" rows="7" spellcheck="false">${esc(e.script || '')}</textarea>
     </div>
     <div class="btn-row">
-      <button class="btn primary mini" data-act="save">保存</button>
-      <button class="btn mini" data-act="cancel">取消</button>
+      <button class="btn sm" data-act="cancel">取消</button>
+      <button class="btn sm primary push" data-act="save">保存</button>
     </div>`;
 }
 
