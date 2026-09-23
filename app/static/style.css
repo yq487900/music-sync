@@ -488,7 +488,10 @@ label.switch .lbl em { display: block; font-style: normal; font-size: 12px; colo
 .pill.s-wait { background: rgba(255, 255, 255, .08); border-color: var(--glass-border); color: var(--text-dim); }
 .pill.s-wait .dot-i { background: var(--text-dim); box-shadow: none; }
 .src .info strong .placeholder-never { display: none; }
-.src .info strong .pill { margin-left: 6px; vertical-align: middle; font-size: 11px; padding: 2px 9px; }
+/* display 必须显式写：.src .info span 把里面所有 span 都设成了 display:block，
+   徒标会被拉成一整行“绿条”（它特异性比 .pill 高，会盖掉 .pill 的 inline-flex） */
+.src .info strong .pill { display: inline-flex; margin-left: 6px; vertical-align: middle;
+  font-size: 11px; padding: 2px 9px; }
 /* 失败原因：单独一行、红色、允许换行（覆盖 .info span 的单行省略号） */
 .src .info .src-err { display: block; font-size: 12px; color: #fca5a5; margin-top: 3px;
   white-space: normal; overflow: visible; text-overflow: clip; }

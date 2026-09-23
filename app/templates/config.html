@@ -386,6 +386,19 @@ function srcBadge(s) {
     ? '<span class="pill s-ok s-badge"><span class="dot-i"></span>可用</span>'
     : '<span class="pill s-bad s-badge"><span class="dot-i"></span>不可用</span>';
 }
+/** 顶部汇总：按每行当前的 ok/bad class 重新统计（逐个检测时实时跟着变） */
+let SRC_RUNNER = true;
+function paintSrcSummary() {
+  const st = document.getElementById('src-state');
+  if (!st) return;
+  const rows = document.querySelectorAll('#src-list .src');
+  if (!rows.length) return;
+  let ok = 0, bad = 0;
+  rows.forEach(el => { if (el.classList.contains('ok')) ok++; else if (el.classList.contains('bad')) bad++; });
+  st.className = 'pill' + (SRC_RUNNER ? '' : ' warn');
+  st.innerHTML = '<span class="dot-i"></span>' + (SRC_RUNNER ? '沙箱正常' : '沙箱异常')
+    + ` · ${ok} 个可用 / ${bad} 个异常`;
+}
 /** 只刷新一行的状态（逐个检测时用，不重绑事件） */
 function paintSrcRow(el, s) {
   if (!el) return;
@@ -404,7 +417,7 @@ function paintSrcRow(el, s) {
     const plat = (s.platforms || []).join('/') || '—';
     const qual = (s.qualities || []).join('/') || '—';
     meta.textContent = `平台 ${plat} · 音质 ${qual}` + (s.checked_at ? ' · 检测于 ' + s.checked_at : ' · 还没检测过');
-  }
+  }  paintSrcSummary();
 }
 function srcRow(s) {
   const plat = (s.platforms || []).join('/') || '—';
@@ -528,6 +541,7 @@ async function loadSources() {
   const st = document.getElementById('src-state');
   if (!r.ok) { list.innerHTML = '<div class="empty">加载失败</div>'; return; }
   st.className = 'pill' + (r.data.runner ? '' : ' warn');
+  SRC_RUNNER = !!r.data.runner;
   const items = r.data.sources || [];
   const okN = items.filter(x => x.ok).length;
   const badN = items.filter(x => x.has_script && !x.ok).length;

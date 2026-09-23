@@ -10,6 +10,16 @@
  */
 'use strict'
 
+// 音源脚本是第三方代码，常有异步错误（例如 init 请求失败后 throw）——
+// 未处理的 Promise rejection / 未捕获异常会让 node 直接退出（exit status 1），
+// 把整个沙箱搞崩，连带后面所有音源检测全部失败。这里兜底：只记日志，绝不让进程退出。
+process.on('unhandledRejection', (e) => {
+  console.error('[lx-runner] unhandledRejection:', (e && e.message) || e)
+})
+process.on('uncaughtException', (e) => {
+  console.error('[lx-runner] uncaughtException:', (e && e.message) || e)
+})
+
 const http = require('node:http')
 const { createCipheriv, createHash, publicEncrypt, randomBytes, constants } = require('node:crypto')
 const { inflate, deflate } = require('node:zlib')
