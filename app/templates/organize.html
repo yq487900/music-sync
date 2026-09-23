@@ -139,9 +139,9 @@ function bindRow(row) {
   row.querySelector('[data-act=edit]').onclick = () => openEditor(row, t);
   row.querySelector('[data-act=scrape]').onclick = async (e) => {
     const b = e.currentTarget;
-    b.disabled = true;
+    setBusy(b, true);
     const r = await jsonReq('/api/organize/scrape', 'POST', { path: t.path });
-    b.disabled = false;
+    setBusy(b, false);
     if (!r.ok || !r.data.ok) { toast((r.data && r.data.reason) || r.data.error || '刮削失败', 'err'); return; }
     const m = r.data.matched || {};
     toast(`已刮削：${m.name || baseName(t.name)}${r.data.cover ? ' · 封面' : ''}${r.data.lyrics ? ' · 歌词' : ''}`, 'ok');
@@ -150,9 +150,9 @@ function bindRow(row) {
   row.querySelector('[data-act=del]').onclick = async (e) => {
     if (!confirm(`把「${t.title || baseName(t.name)}」移入回收站？\n文件不会立即删除，可在回收站找回。`)) return;
     const b = e.currentTarget;
-    b.disabled = true;
+    setBusy(b, true);
     const r = await jsonReq('/api/organize/delete', 'POST', { paths: [t.path] });
-    b.disabled = false;
+    setBusy(b, false);
     if (!r.ok) { toast(r.data.error || '删除失败', 'err'); return; }
     SEL.delete(t.path);
     toast(`已移入回收站：${baseName(t.path)}`, 'ok');
@@ -289,10 +289,10 @@ function bindEditor(panel, it) {
   // 自动刮削：只填表，不写文件（先看后存）
   panel.querySelector('[data-e=auto]').onclick = async (e) => {
     const b = e.currentTarget;
-    b.disabled = true;
+    setBusy(b, true);
     note('正在按现有标签匹配网易云…');
     const r = await jsonReq('/api/organize/scrape', 'POST', { path: it.path, preview: true });
-    b.disabled = false;
+    setBusy(b, false);
     if (!r.ok || !r.data.ok) { note((r.data && r.data.reason) || '没匹配到', 'err'); return; }
     fill(r.data.preview || {});
     const m = r.data.matched || {};
@@ -340,7 +340,7 @@ function bindEditor(panel, it) {
   // 保存
   panel.querySelector('[data-e=save]').onclick = async (e) => {
     const b = e.currentTarget;
-    b.disabled = true;
+    setBusy(b, true);
     const body = {
       path: it.path,
       title: q('e-title').value, artist: q('e-artist').value,
@@ -352,7 +352,7 @@ function bindEditor(panel, it) {
     else if (coverData) body.cover_data = coverData;
     else if (coverUrl) body.cover_url = coverUrl;
     const r = await jsonReq('/api/organize/save', 'POST', body);
-    b.disabled = false;
+    setBusy(b, false);
     if (!r.ok) { note(r.data.error || '保存失败', 'err'); return; }
     toast('已保存', 'ok');
     load();
@@ -485,10 +485,10 @@ async function load() {
 
 document.getElementById('btn-scan').onclick = async (e) => {
   const b = e.currentTarget;
-  b.disabled = true;
+  setBusy(b, true);
   toast('正在扫描音乐库…', 'ok');
   const r = await jsonReq('/api/organize/scan', 'POST');
-  b.disabled = false;
+  setBusy(b, false);
   if (!r.ok) { toast(r.data.error || '扫描失败', 'err'); return; }
   toast(`扫描完成：${r.data.scanned} 首（重新读取 ${r.data.changed} 首）`, 'ok');
   load();
@@ -496,9 +496,9 @@ document.getElementById('btn-scan').onclick = async (e) => {
 
 document.getElementById('btn-backfill').onclick = async (e) => {
   const b = e.currentTarget;
-  b.disabled = true;
+  setBusy(b, true);
   const r = await jsonReq('/api/organize/backfill', 'POST', { q: ST.q });
-  b.disabled = false;
+  setBusy(b, false);
   if (!r.ok) { toast(r.data.error || '入队失败', 'err'); return; }
   if (!r.data.added) { toast('没有需要补齐的曲目', 'ok'); return; }
   toast(`已排入 ${r.data.added} 首（共 ${r.data.candidates} 首待处理）`, 'ok');
@@ -539,14 +539,14 @@ document.getElementById('btn-unselall').onclick = () => {
 document.getElementById('btn-scrapesel').onclick = async (e) => {
   if (!SEL.size) { toast('请先勾选曲目', 'err'); return; }
   const b = e.currentTarget;
-  b.disabled = true;
+  setBusy(b, true);
   toast(`正在刮削 ${SEL.size} 首，稍等…`, 'ok');
   let ok = 0, bad = 0;
   for (const path of [...SEL]) {
     const r = await jsonReq('/api/organize/scrape', 'POST', { path });
     (r.ok && r.data.ok) ? ok++ : bad++;
   }
-  b.disabled = false;
+  setBusy(b, false);
   toast(`刮削完成：成功 ${ok} 首${bad ? `，失败 ${bad} 首` : ''}`, bad ? 'err' : 'ok');
   load();
 };
@@ -554,9 +554,9 @@ document.getElementById('btn-delsel').onclick = async (e) => {
   if (!SEL.size) { toast('请先勾选曲目', 'err'); return; }
   if (!confirm(`把勾选的 ${SEL.size} 个文件移入回收站？\n文件不会立即删除，可在回收站找回。`)) return;
   const b = e.currentTarget;
-  b.disabled = true;
+  setBusy(b, true);
   const r = await jsonReq('/api/organize/delete', 'POST', { paths: [...SEL] });
-  b.disabled = false;
+  setBusy(b, false);
   if (!r.ok) { toast(r.data.error || '删除失败', 'err'); return; }
   SEL.clear();
   toast(`已移入回收站 ${r.data.count} 个文件`, 'ok');
@@ -572,6 +572,6 @@ qEl.oninput = () => {
 qEl.onkeydown = (e) => { if (e.key === 'Enter') { ST.q = qEl.value.trim(); ST.page = 1; load(); } };
 
 load();
-setInterval(pollQueue, 2500);
+pollEvery(pollQueue, 2500);
 </script>
 {% endblock %}

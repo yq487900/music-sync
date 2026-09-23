@@ -168,6 +168,9 @@
     <div class="btn-row" style="margin-top:20px">
       <button type="submit" class="btn primary">保存配置</button>
       <a class="btn" href="/playlists">去选择歌单</a>
+      <button type="button" class="btn" id="btn-export-cfg">导出配置</button>
+      <button type="button" class="btn" id="btn-import-cfg">导入配置</button>
+      <input type="file" id="file-cfg" accept="application/json,.json" hidden>
     </div>
   </form>
 </div>
@@ -236,7 +239,7 @@ async function gen() {
   }
 }
 function poll(key) {
-  polling = setInterval(async () => {
+  polling = pollEvery(async () => {
     const msg = document.getElementById('msg');
     try {
       const d = await post('/api/login/netease/poll', {key});
@@ -272,12 +275,11 @@ document.getElementById('btn-ck').onclick = async () => {
 };
 
 /* ---------------- 同步配置保存 ---------------- */
-document.getElementById('cfg-form').onsubmit = async (e) => {
-  e.preventDefault();
-  const f = e.target;
+/** 从表单收集配置（保存与导出共用同一套字段，避免两处走神） */
+function readCfgForm(f) {
   const chk = n => !!(f[n] && f[n].checked);
   const num = (n, d) => { const v = parseFloat(f[n].value); return isNaN(v) ? d : v; };
-  const data = {
+  return {
     download_dir: f.download_dir.value,
     layout: f.layout.value,
     naming: f.naming.value,
@@ -297,10 +299,45 @@ document.getElementById('cfg-form').onsubmit = async (e) => {
     monitor_batch: num('monitor_batch', 20),
     sync_time: f.sync_time.value
   };
+}
+document.getElementById('cfg-form').onsubmit = async (e) => {
+  e.preventDefault();
+  const btn = e.target.querySelector('button[type=submit]');
+  setBusy(btn, true);
   try {
-    const d = await post('/config', data);
+    const d = await post('/config', readCfgForm(e.target));
     toast(d.jobs && d.jobs.length ? '配置已保存，定时任务已生效' : '配置已保存', 'ok');
   } catch (err) { toast('保存失败', 'err'); }
+  finally { setBusy(btn, false); }
+};
+
+/* ---------- 配置导出 / 导入（换机、回滚用；不含音源脚本与登录 Cookie） ---------- */
+document.getElementById('btn-export-cfg').onclick = () => {
+  const data = readCfgForm(document.getElementById('cfg-form'));
+  const blob = new Blob([JSON.stringify(data, null, 2)], {type: 'application/json'});
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = 'musicsync-config-' + new Date().toISOString().slice(0, 10) + '.json';
+  document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+  toast('配置已导出（不含音源脚本与登录 Cookie）', 'ok');
+};
+document.getElementById('btn-import-cfg').onclick = () => document.getElementById('file-cfg').click();
+document.getElementById('file-cfg').onchange = async (e) => {
+  const f0 = e.target.files && e.target.files[0];
+  if (!f0) return;
+  try {
+    const obj = JSON.parse(await f0.text());
+    const f = document.getElementById('cfg-form');
+    Object.keys(obj).forEach(k => {
+      const el = f[k];
+      if (!el) return;
+      if (el.type === 'checkbox') el.checked = !!obj[k];
+      else if (el.value !== undefined) el.value = obj[k];
+    });
+    toast('已回填表单，请核对后点「保存配置」', 'ok');
+  } catch (err) { toast('文件解析失败，不是有效 JSON', 'err'); }
+  e.target.value = '';
 };
 
 /* ---------------- 音源管理 ---------------- */
@@ -371,9 +408,9 @@ async function loadSources() {
     // 启用 / 停用（左侧开关）
     el.querySelector('.en').onchange = async (e) => {
       const cb = e.target;
-      cb.disabled = true;
+      setBusy(cb, true);
       const r2 = await jsonReq('/api/sources/' + id, 'PATCH', {enabled: cb.checked});
-      cb.disabled = false;
+      setBusy(cb, false);
       if (!r2.ok) {
         toast(r2.data.error || '操作失败', 'err');
         cb.checked = !cb.checked;
@@ -395,13 +432,13 @@ async function loadSources() {
       };
       panel.querySelector('[data-act=save]').onclick = async (ev) => {
         const b = ev.currentTarget;
-        b.disabled = true;
+        setBusy(b, true);
         const rr = await jsonReq('/api/sources/' + id, 'PATCH', {
           name: panel.querySelector('.e-name').value,
           url: panel.querySelector('.e-url').value,
           script: panel.querySelector('.e-script').value,
         });
-        b.disabled = false;
+        setBusy(b, false);
         if (!rr.ok) { toast(rr.data.error || '保存失败', 'err'); return; }
         toast('已保存并重新检测', 'ok');
         loadSources();
@@ -409,9 +446,9 @@ async function loadSources() {
     };
 
     el.querySelector('[data-act=check]').onclick = async (e) => {
-      e.target.disabled = true; toast('检测中…');
+      setBusy(e.target, true); toast('检测中…');
       const r2 = await jsonReq('/api/sources/' + id + '/check', 'POST');
-      e.target.disabled = false;
+      setBusy(e.target, false);
       if (!r2.ok) toast(r2.data.error || '检测失败', 'err');
       else toast(r2.data.source.ok ? '可用' : ('不可用：' + (r2.data.source.note || '')),
                  r2.data.source.ok ? 'ok' : 'err');
@@ -438,10 +475,10 @@ document.getElementById('btn-src-add').onclick = async (e) => {
   const url = document.getElementById('src-url').value.trim();
   const script = document.getElementById('src-script').value.trim();
   if (!url && !script) { toast('请填写脚本链接或粘贴脚本内容', 'err'); return; }
-  e.target.disabled = true;
+  setBusy(e.target, true);
   toast('正在添加并检测…');
   const r = await jsonReq('/api/sources', 'POST', {name, url, script});
-  e.target.disabled = false;
+  setBusy(e.target, false);
   if (!r.ok) { toast(r.data.error || '添加失败', 'err'); return; }
   const s = r.data.source;
   toast(s.ok ? '已添加，音源可用' : '已添加，但检测未通过：' + (s.note || ''), s.ok ? 'ok' : 'err');

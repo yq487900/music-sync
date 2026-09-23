@@ -64,7 +64,7 @@ body {
 }
 
 /* ---------- 布局：左侧竖向菜单贴边 + 右侧内容铺满 ---------- */
-.shell { display: flex; align-items: stretch; min-height: 100vh; }
+.shell { display: flex; align-items: stretch; min-height: 100dvh; }
 
 /* 侧边栏：贴在浏览器左边缘、通栏高度、滚动时固定 */
 .sidebar {
@@ -72,7 +72,7 @@ body {
   top: 0;
   flex: 0 0 226px;
   width: 226px;
-  height: 100vh;
+  height: 100dvh;       /* dvh：移动端地址栏伸缩时不会跳变（旧浏览回退到 100vh） */
   padding: 22px 14px;
   display: flex;
   flex-direction: column;
@@ -162,35 +162,8 @@ h1 {
 h2 { font-size: 16px; margin: 0 0 4px; font-weight: 620; }
 .sub { color: var(--text-dim); font-size: 13.5px; margin: 0 0 20px; line-height: 1.6; }
 
-/* ---------- 首页功能入口 ---------- */
-.tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(210px, 1fr)); gap: 14px; }
-
-.tile {
-  display: flex; align-items: center; gap: 14px;
-  padding: 17px 18px;
-  border-radius: var(--radius-sm);
-  background: rgba(255,255,255,.055);
-  border: 1px solid var(--glass-border);
-  color: var(--text);
-  text-decoration: none;
-  transition: .24s cubic-bezier(.22,.8,.26,1);
-}
-.tile:hover {
-  background: var(--glass-bg-hover);
-  transform: translateY(-3px);
-  border-color: rgba(255,255,255,.3);
-  box-shadow: 0 12px 30px rgba(0,0,0,.3);
-}
-.tile .ico {
-  width: 42px; height: 42px; flex: 0 0 42px;
-  display: grid; place-items: center;
-  border-radius: 13px;
-  font-size: 19px;
-  background: linear-gradient(135deg, rgba(123,140,255,.28), rgba(180,108,255,.22));
-  border: 1px solid rgba(255,255,255,.16);
-}
-.tile .txt strong { display: block; font-size: 14.5px; font-weight: 600; }
-.tile .txt span { display: block; font-size: 12.5px; color: var(--text-dim); margin-top: 3px; }
+/* ---------- 首页功能入口：已移除旧的一套 .tile 定义
+   （它与文件末尾「首页：账号信息 + 状态小卡片」重复，后者才是在用的版本） ---------- */
 
 /* ---------- 按钮 ---------- */
 .btn {
@@ -281,6 +254,10 @@ label.switch .lbl em { display: block; font-style: normal; font-size: 12px; colo
   background: rgba(255,255,255,.08); border: 1px solid var(--glass-border); color: var(--text-dim);
 }
 .pill .dot-i { width: 7px; height: 7px; border-radius: 50%; background: var(--ok); box-shadow: 0 0 9px var(--ok); }
+/* good / warn 要连 pill 本体一起变色 —— 只换圆点颜色的话，在一排小徽标里几乎看不出差别 */
+.pill.good { border-color: rgba(74,222,128,.42); background: rgba(74,222,128,.1); color: #bdf5cf; }
+.pill.good .dot-i { background: var(--ok); box-shadow: 0 0 9px var(--ok); }
+.pill.warn { border-color: rgba(251,191,36,.45); background: rgba(251,191,36,.12); color: #fde68a; }
 .pill.warn .dot-i { background: var(--warn); box-shadow: 0 0 9px var(--warn); }
 
 .toast {
@@ -559,10 +536,15 @@ textarea:focus {
     flex-direction: row;
     gap: 6px;
     overflow-x: auto;
-    padding-bottom: 2px;
-    scrollbar-width: none;
+    padding-bottom: 6px;
+    scrollbar-width: thin;
+    scrollbar-color: rgba(255,255,255,.24) transparent;
   }
-  .nav::-webkit-scrollbar { display: none; }
+  /* 菜单横向滚动：保留一条细滚动条配胶，用户才知道右边还有项 */
+  .nav::-webkit-scrollbar { height: 4px; }
+  .nav::-webkit-scrollbar-track { background: transparent; }
+  .nav::-webkit-scrollbar-thumb { background: rgba(255,255,255,.24); border-radius: 4px; }
+  .nav::-webkit-scrollbar-thumb:hover { background: rgba(255,255,255,.36); }
   .nav a { padding: 9px 13px; font-size: 13.5px; }
   .nav a .i { flex: 0 0 auto; width: auto; font-size: 14px; }
   .main { width: 100%; padding: 16px 14px 46px; }
@@ -603,6 +585,13 @@ textarea:focus {
   /* 极窄屏：信息行字号略收 + 收起文件大小，保证「歌手·专辑·时长·音质·音源」完整显示在一行 */
   .trk .meta > span { font-size: 11px; }
   .trk .meta .sz { display: none; }
+  /* 单列时宽卡不再跨列，否则会被挤出视口 */
+  .tile.wide { grid-column: span 1; }
+  .tiles { grid-template-columns: repeat(auto-fill, minmax(148px, 1fr)); gap: 8px; }
+  .tile { padding: 10px 12px; }
+  .tile .t-v { font-size: 18px; }
+  .tc-fab { right: 12px; bottom: 12px; }
+  .tc-panel { right: 12px; left: 12px; bottom: 64px; width: auto; }
 }
 
 /* ================= 整理页 ================= */
@@ -653,7 +642,7 @@ textarea:focus {
 .cand strong { font-size: 13px; font-weight: 550; white-space: nowrap;
   overflow: hidden; text-overflow: ellipsis; }
 .cand span { font-size: 11.5px; color: var(--text-dim); }
-.cand .hint { grid-column: 2; grid-row: 1; }
+/* （旧两列布局遗留的 .cand .hint 定位已移除：与后面的三列版冲突，且无模板使用） */
 
 /* 窄屏：编辑面板单列，状态灯换到独立一行 */
 @media (max-width: 1100px) {
@@ -673,7 +662,7 @@ textarea:focus {
 /* 弹窗（加歌单等） */
 .modal-back { position: fixed; inset: 0; z-index: 60; background: rgba(5, 7, 18, .62);
   backdrop-filter: blur(4px); display: grid; place-items: center; padding: 20px; }
-.modal { width: min(620px, 94vw); max-height: 80vh; display: flex; flex-direction: column;
+.modal { width: min(620px, 94vw); max-height: 80dvh; display: flex; flex-direction: column;
   border-radius: 18px; border: 1px solid rgba(255, 255, 255, .14);
   background: linear-gradient(160deg, #171b33, #12152a); box-shadow: 0 24px 60px rgba(0, 0, 0, .5); }
 .modal-h { display: flex; align-items: center; justify-content: space-between; gap: 12px;
@@ -720,12 +709,24 @@ textarea:focus {
 
 .tiles { display: grid; grid-template-columns: repeat(auto-fill, minmax(212px, 1fr)); gap: 10px;
   margin-top: 8px; }
-.tile { display: flex; flex-direction: column; gap: 3px; min-width: 0; padding: 12px 14px;
-  border-radius: 14px; border: 1px solid var(--glass-border); background: rgba(255, 255, 255, .045); }
+.tile { position: relative; display: flex; flex-direction: column; gap: 3px; min-width: 0; padding: 12px 14px;
+  border-radius: 14px; border: 1px solid var(--glass-border); background: rgba(255, 255, 255, .045);
+  color: inherit; text-decoration: none; transition: .2s cubic-bezier(.22,.8,.26,1); }
+/* 统计卡整块可点（div 时代没有 hover 反馈，改成链接后补上） */
+a.tile:hover, a.tile:focus-visible { background: var(--glass-bg-hover); border-color: rgba(255,255,255,.3);
+  transform: translateY(-2px); box-shadow: 0 10px 24px rgba(0,0,0,.28); }
+a.tile::after { content: "\203A"; position: absolute; top: 8px; right: 12px; font-size: 15px;
+  color: var(--text-dim); opacity: .5; transition: .2s; }
+a.tile:hover::after { opacity: 1; transform: translateX(2px); }
 .tile .t-k { font-size: 12.5px; color: var(--text-dim); }
 .tile .t-v { font-size: 20px; font-weight: 600; letter-spacing: .3px; }
 .tile .t-h { font-size: 11.5px; line-height: 1.45; color: var(--text-dim); }
 .tile.wide { grid-column: span 2; }
+/* 首页概览分组标题 */
+.tile-grp { display: flex; align-items: center; gap: 10px; margin: 18px 0 8px;
+  font-size: 12.5px; color: var(--text-dim); letter-spacing: .4px; }
+.tile-grp::after { content: ""; flex: 1; height: 1px; background: rgba(255,255,255,.08); }
+.tile-grp:first-of-type { margin-top: 6px; }
 
 /* ---------- 候选列表（带封面缩略图；来源 / ID 排成一行、字号加大） ---------- */
 .cand { grid-template-columns: 42px minmax(0, 1fr) auto; align-items: center; gap: 4px 12px; }
@@ -741,3 +742,106 @@ textarea:focus {
   color: rgba(200,210,255,.9); background: rgba(123,140,255,.16);
   border: 1px solid rgba(123,140,255,.3); white-space: nowrap; }
 .cand .cand-id { font-size: 13px; color: var(--text-dim); white-space: nowrap; }
+
+/* ================= 新增：可访问性 ================= */
+/* 键盘焦点环（原全站无 :focus-visible，Tab 导航时看不到位置） */
+a:focus-visible, button:focus-visible, [role="button"]:focus-visible,
+.chip:focus-visible, .pick:focus-visible, summary:focus-visible,
+.ci-icon.ci-clickable:focus-visible {
+  outline: 2px solid var(--accent-1);
+  outline-offset: 2px;
+  border-radius: 8px;
+}
+
+/* 动效降级：尊重系统「减少动态效果」设置 */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: .01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: .01ms !important;
+  }
+  .blob { animation: none; }
+  .card { animation: none; }
+}
+
+/* ================= 新增：按钮忙碌态 ================= */
+/* 用法：setBusy(btn, true)（见 base.html）。只给显式加 .loading 的按钮转圈，
+   以免分页到底这类「不可用」的禁用态也变成转圈 */
+.btn.loading { position: relative; color: transparent !important; pointer-events: none; }
+.btn.loading > * { visibility: hidden; }
+.btn.loading::after {
+  content: ""; position: absolute; left: 50%; top: 50%;
+  width: 15px; height: 15px; margin: -8px 0 0 -8px;
+  border-radius: 50%; border: 2px solid rgba(255,255,255,.35); border-top-color: #fff;
+  animation: spin .7s linear infinite;
+}
+
+/* ================= 新增：骨架屏 ================= */
+.sk { display: block; border-radius: 8px; height: 1em;
+  background: linear-gradient(90deg, rgba(255,255,255,.06) 25%, rgba(255,255,255,.13) 37%, rgba(255,255,255,.06) 63%);
+  background-size: 400% 100%; animation: sk 1.3s ease-in-out infinite; }
+.sk.line { height: .85em; margin: 6px 0; }
+.sk.w40 { width: 40%; } .sk.w60 { width: 60%; } .sk.w80 { width: 80%; }
+@keyframes sk { 0% { background-position: 100% 50%; } 100% { background-position: 0 50%; } }
+
+/* ================= 新增：全局任务中心 ================= */
+.tc-fab {
+  position: fixed; right: 18px; bottom: 18px; z-index: 70;
+  display: flex; align-items: center; gap: 8px;
+  padding: 10px 15px; border-radius: 999px; cursor: pointer;
+  font-size: 13px; font-family: inherit; color: var(--text);
+  background: rgba(20,26,46,.86); border: 1px solid var(--glass-border);
+  backdrop-filter: blur(20px) saturate(160%);
+  -webkit-backdrop-filter: blur(20px) saturate(160%);
+  box-shadow: 0 12px 34px rgba(0,0,0,.42);
+  transition: .2s cubic-bezier(.22,.8,.26,1);
+}
+.tc-fab:hover { background: var(--glass-bg-hover); transform: translateY(-2px); }
+.tc-fab .tc-dot { width: 8px; height: 8px; border-radius: 50%; background: rgba(242,245,255,.4); }
+.tc-fab.busy .tc-dot { background: var(--accent-1); box-shadow: 0 0 10px var(--accent-1);
+  animation: pulse 1.4s ease-in-out infinite; }
+.tc-fab.err .tc-dot { background: var(--err); box-shadow: 0 0 10px var(--err); }
+@keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: .35; } }
+
+.tc-panel {
+  position: fixed; right: 18px; bottom: 74px; z-index: 71;
+  width: min(430px, calc(100vw - 36px)); max-height: min(70dvh, 560px);
+  display: none; flex-direction: column;
+  border-radius: 18px; border: 1px solid rgba(255,255,255,.14);
+  background: linear-gradient(160deg, #171b33, #12152a);
+  box-shadow: 0 24px 60px rgba(0,0,0,.5); overflow: hidden;
+}
+.tc-panel.show { display: flex; }
+.tc-h { display: flex; align-items: center; justify-content: space-between; gap: 10px;
+  padding: 14px 16px 12px; border-bottom: 1px solid rgba(255,255,255,.1); }
+.tc-h strong { font-size: 15px; }
+.tc-b { padding: 12px 16px 16px; overflow: auto; }
+.tc-row { padding: 10px 12px; border-radius: 12px; margin-bottom: 8px;
+  background: rgba(255,255,255,.04); border: 1px solid transparent; }
+.tc-row.doing { border-color: rgba(123,140,255,.42); background: rgba(123,140,255,.1); }
+.tc-row .tc-top { display: flex; align-items: center; gap: 10px; font-size: 13.5px; }
+.tc-row .tc-top .tc-t { flex: 1; min-width: 0; font-weight: 560; }
+.tc-row .tc-top .tc-n { color: var(--text-dim); font-size: 12.5px; white-space: nowrap; }
+.tc-row small { display: block; color: var(--text-dim); font-size: 11.5px; margin-top: 3px;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.tc-bar { height: 6px; border-radius: 999px; background: rgba(255,255,255,.12); overflow: hidden; margin-top: 7px; }
+.tc-bar > i { display: block; height: 100%; border-radius: 999px;
+  background: linear-gradient(90deg, var(--accent-1), var(--accent-2)); transition: width .35s ease; }
+.tc-empty { text-align: center; padding: 26px 12px; color: var(--text-dim); font-size: 13px; }
+
+/* ================= 新增：状态图标图例 ================= */
+.legend-btn { display: inline-flex; align-items: center; gap: 6px; padding: 5px 11px;
+  font-size: 12px; border-radius: 999px; cursor: pointer; font-family: inherit;
+  color: var(--text-dim); background: rgba(255,255,255,.06); border: 1px solid var(--glass-border); }
+.legend-btn:hover { background: var(--glass-bg-hover); color: var(--text); }
+.legend { display: grid; grid-template-columns: repeat(auto-fit, minmax(215px, 1fr)); gap: 12px 18px; }
+.legend .lg-row { display: flex; align-items: flex-start; gap: 10px; font-size: 13px; }
+.legend .lg-row .ci-icon { width: 26px; height: 26px; flex: 0 0 26px; margin-top: 1px; }
+.legend .lg-row small { display: block; color: var(--text-dim); font-size: 11.5px; margin-top: 2px; line-height: 1.5; }
+
+/* ================= 新增：失败重试中心 ================= */
+.rt-acts { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; margin: 12px 0 4px; }
+.rt-sum { display: flex; flex-wrap: wrap; gap: 8px; margin: 10px 0 2px; }
+.rt-sum .tag { font-size: 12px; padding: 4px 11px; border-radius: 999px;
+  background: rgba(248,113,113,.14); border: 1px solid rgba(248,113,113,.32); color: #fca5a5; }
+.rt-sum .tag b { font-weight: 600; }

@@ -205,10 +205,10 @@ function bindRows(box) {
       const t = curItems[Number(rowOf(b).dataset.i)];
       const sel = rowOf(b).querySelector('.src-sel');
       if (!t.track_id) { toast('该曲目还没同步进库，请先加入同步', 'err'); return; }
-      b.disabled = true;
+      setBusy(b, true);
       const r = await jsonReq(`/api/tracks/${t.track_id}/download`, 'POST',
                               {source: sel ? sel.value : ''});
-      b.disabled = false;
+      setBusy(b, false);
       if (!r.ok) { toast(r.data.error || '无法开始下载', 'err'); return; }
       t.source_pref = sel ? sel.value : '';
       toast('已加入下载队列', 'ok');
@@ -251,9 +251,9 @@ async function load(soft) {
 /** 单独补一个歌单：先只算计划（dry），确认后再真排队下载/补传 */
 async function fillPlaylist(dryOnly) {
   const b = document.getElementById('btn-fill');
-  b.disabled = true;
+  setBusy(b, true);
   const p = await jsonReq(`/api/playlists/${PID}/fill`, 'POST', {dry: dryOnly});
-  b.disabled = false;
+  setBusy(b, false);
   if (!p.ok) { toast(p.data.error || '扫描失败', 'err'); return null; }
   const d = p.data;
   if (dryOnly) {
@@ -314,7 +314,7 @@ function pollProgress() {
   const txt = document.getElementById('progress');
   bar.style.display = ''; txt.style.display = '';
   clearInterval(window._t);
-  window._t = setInterval(async () => {
+  window._t = pollEvery(async () => {
     try {
       const s = await fetch('/api/status').then(r => r.json());
       const q = (s.queues && s.queues.download) || {};

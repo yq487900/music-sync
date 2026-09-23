@@ -1,0 +1,18 @@
+{
+  "name": "MusicSync 音乐同步控制台",
+  "short_name": "MusicSync",
+  "description": "网易云歌单同步：下载、整理、备份到云盘",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "background_color": "#0b0f1f",
+  "theme_color": "#0b0f1f",
+  "icons": [
+    {
+      "src": "/static/icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any"
+    }
+  ]
+}

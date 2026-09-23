@@ -375,9 +375,9 @@ function bindCloudEdit(host, item) {
     const asid = sidInput.value.trim();
     if (!/^\d+$/.test(asid)) { toast('请填写纯数字的网易云歌曲 ID', 'err'); return; }
     const btn = e.currentTarget;
-    btn.disabled = true;
+    setBusy(btn, true);
     const r = await jsonReq(`/api/cloud/songs/${encodeURIComponent(item.sid)}/match`, 'POST', {asid});
-    btn.disabled = false;
+    setBusy(btn, false);
     if (!r.ok) {
       // 409 = 条目已经不在了（多半是刚匹配成功、云盘换了新记录）→ 提示 + 刷新列表
       toast(r.data.error || '匹配失败', r.data.already_matched ? 'ok' : 'err');

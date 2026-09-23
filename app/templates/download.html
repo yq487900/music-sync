@@ -54,7 +54,11 @@
     <button class="btn mini" id="btn-unselect-page">取消本页</button>
     <button class="btn mini" id="btn-select-all">全部勾选</button>
     <button class="btn mini" id="btn-unselect-all">全部取消</button>
+    <button class="btn mini" id="btn-only-failed">只看失败</button>
+    <button class="btn mini" id="btn-retry-failed">重试全部失败</button>
   </div>
+  <!-- 失败汇总：按原因分组，让用户知道“为什么失败”而不只是“有几首失败” -->
+  <div class="rt-sum" id="rt-sum" hidden></div>
   <div id="list"><div class="empty"><div class="big">⏳</div>正在加载…</div></div>
   <div class="pager" id="pager" style="display:none"></div>
 </div>
@@ -166,10 +170,10 @@ function bindRows(box) {
     b.onclick = async () => {
       const t = rowItem(b);
       const sel = b.closest('.trk').querySelector('.src-sel');
-      b.disabled = true;
+      setBusy(b, true);
       const r = await jsonReq(`/api/tracks/${t.id}/download`, 'POST',
                               {source: sel ? sel.value : ''});
-      b.disabled = false;
+      setBusy(b, false);
       if (!r.ok) { toast(r.data.error || '无法开始下载', 'err'); return; }
       toast('已加入下载队列', 'ok');
       pollQueue();
@@ -315,5 +319,48 @@ document.getElementById('btn-unselect-all').onclick = async () => {
 
 load();
 pollQueue();
+/* ================= 新增：失败重试中心 ================= */
+let FAILED_IDS = [];
+async function loadFailedSummary() {
+  const r = await jsonReq('/api/tracks?page=1&size=500&filter=failed');
+  const box = document.getElementById('rt-sum');
+  if (!box) return;
+  if (!r.ok) { box.hidden = true; return; }
+  const items = (r.data && r.data.items) || [];
+  FAILED_IDS = items.map(function (x) { return x.id; });
+  if (!items.length) { box.hidden = true; box.innerHTML = ''; return; }
+  const groups = {};
+  items.forEach(function (x) {
+    let reason = String(x.error || '未记录原因');
+    // 去掉开头的“下载失败：”前缀，按真正的错误类型分组
+    reason = reason.replace(/^下载失败[:：]\s*/, '').split(/[，（(]/)[0].slice(0, 36) || '未记录原因';
+    groups[reason] = (groups[reason] || 0) + 1;
+  });
+  box.hidden = false;
+  box.innerHTML = '<span class="hint" style="align-self:center">共 ' + items.length + ' 首失败：</span>'
+    + Object.keys(groups).sort(function (a, b) { return groups[b] - groups[a]; })
+        .map(function (k) { return '<span class="tag">' + esc(k) + ' <b>×' + groups[k] + '</b></span>'; })
+        .join('');
+}
+document.getElementById('btn-only-failed').onclick = function () {
+  ST.filter = 'failed'; ST.page = 1; load();
+};
+document.getElementById('btn-retry-failed').onclick = async function (e) {
+  const btn = e.currentTarget;
+  if (!FAILED_IDS.length) { toast('当前没有失败曲目', 'ok'); return; }
+  if (!confirm('把 ' + FAILED_IDS.length + ' 首失败曲目重新加入下载队列？\n连续失败已进入退避的也会强制重试一次。')) return;
+  setBusy(btn, true);
+  let ok = 0, bad = 0;
+  try {
+    for (const id of FAILED_IDS) {
+      const r = await jsonReq('/api/tracks/' + id + '/download', 'POST');
+      if (r.ok) ok++; else bad++;
+    }
+    toast('已重新排队 ' + ok + ' 首' + (bad ? ('，' + bad + ' 首被拒绝') : ''), ok ? 'ok' : 'err');
+    load();
+    loadFailedSummary();
+  } finally { setBusy(btn, false); }
+};
+loadFailedSummary();
 </script>
 {% endblock %}

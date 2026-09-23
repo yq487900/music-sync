@@ -29,35 +29,45 @@
 
 <div class="card">
   <h2>概览</h2>
-  <p class="sub">歌单 / 本地曲库 / 云盘 / 索引 / 监控的实时状态。</p>
+  <p class="sub">歌单 / 本地曲库 / 云盘 / 索引 / 监控的实时状态。
+    <span class="hint" id="s-updated"></span></p>
+  <p class="hint" id="home-err" hidden style="color:var(--err)"></p>
+
+  <div class="tile-grp">歌单与曲库</div>
   <div class="tiles">
-    <div class="tile"><span class="t-k">已勾选歌单</span><span class="t-v" id="s-playlists">—</span>
-      <span class="t-h" id="s-playlists-h"></span></div>
-    <div class="tile"><span class="t-k">曲目总数</span><span class="t-v" id="s-tracks">—</span>
-      <span class="t-h" id="s-tracks-h"></span></div>
-    <div class="tile"><span class="t-k">已下载到本地</span><span class="t-v" id="s-done">—</span>
-      <span class="t-h" id="s-done-h"></span></div>
-    <div class="tile"><span class="t-k">待下载 / 失败</span><span class="t-v" id="s-pending">—</span>
-      <span class="t-h" id="s-failed-h"></span></div>
+    <a class="tile" href="/playlists"><span class="t-k">已勾选歌单</span><span class="t-v" id="s-playlists">—</span>
+      <span class="t-h" id="s-playlists-h"></span></a>
+    <a class="tile" href="/download"><span class="t-k">曲目总数</span><span class="t-v" id="s-tracks">—</span>
+      <span class="t-h" id="s-tracks-h"></span></a>
+    <a class="tile" href="/organize"><span class="t-k">已下载到本地</span><span class="t-v" id="s-done">—</span>
+      <span class="t-h" id="s-done-h"></span></a>
+    <a class="tile" href="/download?filter=failed"><span class="t-k">待下载 / 失败</span><span class="t-v" id="s-pending">—</span>
+      <span class="t-h" id="s-failed-h"></span></a>
+    <a class="tile" href="/organize"><span class="t-k">本地曲库文件</span><span class="t-v" id="s-lib">—</span>
+      <span class="t-h">「整理」页面扫描到的文件数</span></a>
+    <a class="tile" href="/trash"><span class="t-k">回收站</span><span class="t-v" id="s-trash">—</span>
+      <span class="t-h" id="s-trash-h"></span></a>
+  </div>
 
-    <div class="tile"><span class="t-k">云盘歌曲</span><span class="t-v" id="s-cloud">—</span>
-      <span class="t-h" id="s-cloud-h"></span></div>
-    <div class="tile"><span class="t-k">云盘缺封面 / 无信息</span><span class="t-v" id="s-nocover">—</span>
-      <span class="t-h">这些是网易云没认出来的歌，匹配不了</span></div>
-    <div class="tile"><span class="t-k">云盘容量</span><span class="t-v" id="s-csize">—</span>
-      <span class="t-h" id="s-csize-h"></span></div>
-    <div class="tile"><span class="t-k">本地曲库文件</span><span class="t-v" id="s-lib">—</span>
-      <span class="t-h">「整理」页面扫描到的文件数</span></div>
-
-    <div class="tile"><span class="t-k">回收站</span><span class="t-v" id="s-trash">—</span>
-      <span class="t-h" id="s-trash-h"></span></div>
-    <div class="tile"><span class="t-k">歌单监控</span><span class="t-v" id="s-mon">—</span>
-      <span class="t-h" id="s-mon-h"></span></div>
-    <div class="tile wide"><span class="t-k">云盘索引 / 歌单索引</span>
+  <div class="tile-grp">云盘</div>
+  <div class="tiles">
+    <a class="tile" href="/cloud"><span class="t-k">云盘歌曲</span><span class="t-v" id="s-cloud">—</span>
+      <span class="t-h" id="s-cloud-h"></span></a>
+    <a class="tile" href="/cloud"><span class="t-k">云盘缺封面 / 无信息</span><span class="t-v" id="s-nocover">—</span>
+      <span class="t-h">网易云没认出来的歌，匹配不了</span></a>
+    <a class="tile" href="/cloud"><span class="t-k">云盘容量</span><span class="t-v" id="s-csize">—</span>
+      <span class="t-h" id="s-csize-h"></span></a>
+    <a class="tile wide" href="/cloud"><span class="t-k">云盘索引 / 歌单索引</span>
       <span class="t-v" id="s-idx">—</span>
-      <span class="t-h" id="s-idx-h"></span></div>
-    <div class="tile"><span class="t-k">队列状态</span><span class="t-v" id="s-queue">—</span>
-      <span class="t-h" id="s-queue-h"></span></div>
+      <span class="t-h" id="s-idx-h"></span></a>
+  </div>
+
+  <div class="tile-grp">监控与队列</div>
+  <div class="tiles">
+    <a class="tile" href="/config"><span class="t-k">歌单监控</span><span class="t-v" id="s-mon">—</span>
+      <span class="t-h" id="s-mon-h"></span></a>
+    <a class="tile" href="/download"><span class="t-k">队列状态</span><span class="t-v" id="s-queue">—</span>
+      <span class="t-h" id="s-queue-h"></span></a>
   </div>
 </div>
 
@@ -92,12 +102,20 @@ const fmtAgo = (s) => {
   return `${(s / 3600).toFixed(1)} 小时前`;
 };
 const setV = (id, v) => { const el = document.getElementById(id); if (el) el.textContent = v; };
+const fmtN = (n) => Number(n || 0).toLocaleString('zh-CN');   // 大数字千分位
 
 let HOME = {};
 
 async function loadHome() {
-  let d = null;
-  try { d = await (await fetch('/api/home')).json(); } catch (e) { return; }
+  const res = await jsonReq('/api/home');
+  const errBox = document.getElementById('home-err');
+  if (!res.ok) {
+    // 显式错误态：原先静默 return，接口挂了页面只停在一排「—」，看不出出错
+    if (errBox) { errBox.hidden = false; errBox.textContent = res.error || ('数据读取失败（HTTP ' + res.status + '）'); }
+    return;
+  }
+  if (errBox) errBox.hidden = true;
+  const d = res.data || {};
   HOME = d;
   const a = d.account || {};
   const st = d.stats || {};
@@ -136,23 +154,26 @@ async function loadHome() {
     document.getElementById('login-hint').hidden = false;
   }
 
-  // ── 概览
-  setV('s-playlists', `${st.playlists_configured || 0} 个`);
-  setV('s-playlists-h', `已同步入库 ${st.synced_playlists || 0} 个歌单`);
-  setV('s-tracks', `${st.tracks || 0} 首`);
-  setV('s-tracks-h', `其中已勾选 ${st.selected || 0} 首`);
-  setV('s-done', `${st.downloaded || 0} 首`);
-  setV('s-done-h', `已上传云盘 ${st.uploaded || 0} 首 · 待上传 ${st.waiting_upload || 0} 首`);
-  setV('s-pending', `${st.pending || 0} / ${st.failed || 0}`);
-  setV('s-failed-h', (st.failed ? '有失败曲目，去下载页看看' : '没有失败曲目'));
+  // ── 概览（数字统一千分位）
+  setV('s-updated', '· 更新于 ' + new Date().toLocaleTimeString('zh-CN', {hour12: false}));
+  setV('s-playlists', `${fmtN(st.playlists_configured)} 个`);
+  setV('s-playlists-h', `已同步入库 ${fmtN(st.synced_playlists)} 个歌单`);
+  setV('s-tracks', `${fmtN(st.tracks)} 首`);
+  setV('s-tracks-h', `其中已勾选 ${fmtN(st.selected)} 首`);
+  setV('s-done', `${fmtN(st.downloaded)} 首`);
+  setV('s-done-h', `已上传云盘 ${fmtN(st.uploaded)} 首 · 待上传 ${fmtN(st.waiting_upload)} 首`);
+  setV('s-pending', `${fmtN(st.pending)} / ${fmtN(st.failed)}`);
+  setV('s-failed-h', st.failed
+    ? `${fmtN(st.failed)} 首失败，点这张卡去重试`
+    : '没有失败曲目');
 
-  setV('s-cloud', `${cl.total || 0} 首`);
-  setV('s-cloud-h', `其中 ${cl.in_playlist || 0} 首在你歌单里`);
-  setV('s-nocover', `${cl.cover_no || 0} 首`);
+  setV('s-cloud', `${fmtN(cl.total)} 首`);
+  setV('s-cloud-h', `其中 ${fmtN(cl.in_playlist)} 首在你歌单里`);
+  setV('s-nocover', `${fmtN(cl.cover_no)} 首`);
   setV('s-csize', a.cloud_max ? `${Math.round((a.cloud_size || 0) / a.cloud_max * 100)}%` : '—');
   setV('s-csize-h', a.cloud_max ? `${fmtSize(a.cloud_size)} / ${fmtSize(a.cloud_max)}` : '需要登录后查看');
-  setV('s-lib', `${(d.lib || {}).files || 0} 首`);
-  setV('s-trash', `${(d.trash || {}).count || 0} 首`);
+  setV('s-lib', `${fmtN((d.lib || {}).files)} 首`);
+  setV('s-trash', `${fmtN((d.trash || {}).count)} 首`);
   setV('s-trash-h', `占用 ${fmtSize((d.trash || {}).size || 0)} · 在「回收站」里处理`);
 
   setV('s-mon', mon.on ? '已开启' : '已关闭');
@@ -164,7 +185,7 @@ async function loadHome() {
 
   const ci = cl.index || {};
   const pj = (d.playlist_index || {});
-  setV('s-idx', `${ci.count || 0} / ${pj.songs || 0}`);
+  setV('s-idx', `${fmtN(ci.count)} / ${fmtN(pj.songs)}`);
   setV('s-idx-h', `云盘索引 ${ci.count ? fmtAgo(ci.age) : '未建好'}`
     + (ci.refreshing ? '（正在刷新…）' : '')
     + ` · 歌单索引 ${pj.playlists || 0} 个歌单 ${pj.songs || 0} 首 ${pj.at ? fmtAgo(pj.age) : ''}`);
@@ -173,7 +194,7 @@ async function loadHome() {
   const busy = ['download', 'upload', 'organize'].filter(k => (q[k] || {}).busy);
   const dn = (q.download || {}), up = (q.upload || {});
   setV('s-queue', busy.length ? '进行中' : '空闲');
-  setV('s-queue-h', `下载 ${dn.done || 0} 完成 / ${dn.failed || 0} 失败 · 上传 ${up.done || 0} 完成 / ${up.failed || 0} 失败`);
+  setV('s-queue-h', `下载 ${fmtN(dn.done)} 完成 / ${fmtN(dn.failed)} 失败 · 上传 ${fmtN(up.done)} 完成 / ${fmtN(up.failed)} 失败`);
 
   // ── 顶部状态
   document.getElementById('pill-ncm').className = 'pill good';
@@ -191,17 +212,26 @@ async function loadHome() {
 async function reload() { await loadHome(); toast('已刷新', 'ok'); }
 
 document.getElementById('btn-reload').onclick = reload;
-document.getElementById('btn-sync').onclick = async () => {
-  const r = await jsonReq('/api/sync/netease', 'POST');
-  if (!r.ok) { toast(r.data.error || '无法开始', 'err'); return; }
-  toast('歌单同步已开始', 'ok');
-  pollProgress();
+// 长操作：按钮转圈 + 禁用，完成后自动恢复（原先只有 disabled，看不出在忙）
+document.getElementById('btn-sync').onclick = async (e) => {
+  const btn = e.currentTarget;
+  setBusy(btn, true);
+  try {
+    const r = await jsonReq('/api/sync/netease', 'POST', null, 120000);
+    if (!r.ok) { toast(r.data.error || r.error || '无法开始', 'err'); return; }
+    toast('歌单同步已开始', 'ok');
+    pollProgress();
+  } finally { setBusy(btn, false); }
 };
-document.getElementById('btn-dl').onclick = async () => {
-  const r = await jsonReq('/api/tracks/download-selected', 'POST');
-  if (!r.ok) { toast(r.data.error || '没有可下载的曲目', 'err'); return; }
-  toast(`已加入下载队列：${r.data.added} 首`, 'ok');
-  pollProgress();
+document.getElementById('btn-dl').onclick = async (e) => {
+  const btn = e.currentTarget;
+  setBusy(btn, true);
+  try {
+    const r = await jsonReq('/api/tracks/download-selected', 'POST', null, 120000);
+    if (!r.ok) { toast(r.data.error || r.error || '没有可下载的曲目', 'err'); return; }
+    toast(`已加入下载队列：${r.data.added} 首`, 'ok');
+    pollProgress();
+  } finally { setBusy(btn, false); }
 };
 
 // 队列进度（有任务时才轮询；只改进度条，不动卡片）
@@ -230,6 +260,7 @@ async function pollProgress() {
 }
 
 loadHome();
+pollEvery(loadHome, 30000);        // 首页自动刷新（页面在后台时自动跳过）
 fetch('/api/status').then(r => r.json()).then(s => {
   const q = (s.queues && s.queues.download) || {};
   if (q.busy || s.running) pollProgress();

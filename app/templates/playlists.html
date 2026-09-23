@@ -110,7 +110,7 @@ async function pollProgress() {
   const txt = document.getElementById('progress');
   bar.style.display = ''; txt.style.display = '';
   clearInterval(window._t);
-  window._t = setInterval(async () => {
+  window._t = pollEvery(async () => {
     try {
       const s = await fetch('/api/status').then(r => r.json());
       if (s.running) {
@@ -134,11 +134,11 @@ async function pollProgress() {
 }
 
 document.getElementById('btn-sync').onclick = async (e) => {
-  e.target.disabled = true;
+  setBusy(e.target, true);
   const r = await jsonReq('/api/sync/netease', 'POST');
   if (!r.ok) toast(r.data.error || '无法开始', 'err');
   else { toast('同步已开始', 'ok'); pollProgress(); }
-  setTimeout(() => e.target.disabled = false, 2000);
+  setTimeout(() => setBusy(e.target, false), 2000);
 };
 document.getElementById('btn-reload').onclick = () => { load(); toast('正在刷新歌单列表…', 'ok'); };
 document.getElementById('btn-add').onclick = async () => {
