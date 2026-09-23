@@ -16,7 +16,7 @@
   </div>
   <div class="btn-row">
     <button class="btn" id="btn-scan"><svg><use href="#ic-refresh"/></svg>扫描曲库</button>
-    <button class="btn primary push" id="btn-backfill"><svg><use href="#ic-spark"/></svg>一键刮削缺的</button>
+    <button class="btn primary" id="btn-backfill"><svg><use href="#ic-spark"/></svg>一键刮削缺的</button>
   </div>
 </div>
 
@@ -35,7 +35,8 @@
 <!-- ===================== 曲库曲目 ===================== -->
 <div class="card">
   <h2>曲库曲目</h2>
-  <div class="field" style="max-width:340px;margin-top:12px">
+  <div class="searchbar">
+    <svg><use href="#ic-search"/></svg>
     <input id="q" placeholder="搜歌名 / 歌手 / 专辑 / 文件名，回车搜索">
   </div>
   <div class="chips" id="chips">
@@ -63,7 +64,7 @@
       <option value="artist:asc">歌手 A→Z</option>
       <option value="artist:desc">歌手 Z→A</option>
     </select>
-    <span class="tb-push"></span>
+    <span class="tb-sep"></span>
     <button class="btn sm" id="btn-selpage">勾选本页</button>
     <button class="btn sm" id="btn-unselpage">取消本页</button>
     <span class="tb-sep"></span>
@@ -260,7 +261,7 @@ function editHtml(it) {
   <div class="btn-row">
     <button class="btn sm" data-e="auto"><svg><use href="#ic-spark"/></svg>自动刮削（只填表，不保存）</button>
     <button class="btn sm" data-e="cancel">取消</button>
-    <button class="btn sm primary push" data-e="save"><svg><use href="#ic-check"/></svg>保存</button>
+    <button class="btn sm primary" data-e="save"><svg><use href="#ic-check"/></svg>保存</button>
   </div>`;
 }
 

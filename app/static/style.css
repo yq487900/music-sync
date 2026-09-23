@@ -194,16 +194,17 @@ h2 { font-size: 16px; margin: 0 0 4px; font-weight: 620; }
 .btn.primary:hover { box-shadow: 0 12px 32px rgba(123,140,255,.5); }
 .btn[disabled] { opacity: .55; cursor: not-allowed; transform: none; }
 .btn-row { display: flex; gap: 12px; flex-wrap: wrap; margin-top: 4px; }
-/* 主操作（紫）推到行尾：一行里「灰 = 次要、紫 = 主要」，不再紫灰交替显得零乱 */
-.btn-row .push { margin-left: auto; }
-/* 次级小按钮：批量并排时尺寸一致（.btn.mini 只缩了图标、高度仍与主按钮相同，易显得参差） */
-.btn.sm { padding: 9px 15px; font-size: 13px; border-radius: 12px; gap: 7px; }
+/* 按钮一律左对齐、按操作顺序连续排列。不做「左灰右紫」两端分区 ——
+   两端分区要两头找按钮，反而割裂 */
+/* 次级小按钮：高度与工具条里的搜索框 / 排序下拉对齐，批量并排时尺寸一致
+   （.btn.mini 只缩了图标、高度仍与主按钮相同，易显得参差） */
+.btn.sm { padding: 10px 15px; font-size: 13.5px; border-radius: 12px; gap: 7px; }
 .btn.sm svg { width: 14px; height: 14px; flex-basis: 14px; }
-/* 列表工具条：排序在左、批量勾选在右，同一行 */
+/* 列表工具条：排序 → 批量操作 → 执行动作，全部左对齐，组间用竖线分隔 */
 .toolrow { display: flex; flex-wrap: wrap; gap: 9px; align-items: center; margin: 12px 0 4px; }
 .toolrow .lbl { font-size: 12px; color: var(--text-dim); }
-.toolrow .tb-push { flex: 1 1 auto; }
-.toolrow .tb-sep { width: 1px; height: 18px; background: var(--glass-border); margin: 0 3px; }
+.toolrow .src-sel { padding: 10px 14px; font-size: 13.5px; }
+.toolrow .tb-sep { width: 1px; height: 20px; background: var(--glass-border); margin: 0 3px; }
 
 /* ---------- 表单 ---------- */
 .field { margin-bottom: 18px; }
@@ -595,9 +596,10 @@ textarea:focus {
   h1 { font-size: 20px; }
   .btn-row { gap: 9px; }
   .toolrow { gap: 7px; }
-  .toolrow .tb-push { display: none; }   /* 窄屏不再左右分区，按钮自然左对齐换行 */
   .btn { padding: 10px 15px; font-size: 13.5px; }
-  .btn.sm { padding: 8px 12px; font-size: 12.5px; }
+  .btn.sm { padding: 9px 12px; font-size: 13px; }
+  .searchbar { padding: 10px 13px; }
+  .toolrow .src-sel { padding: 9px 12px; font-size: 13px; }
   /* 极窄屏：信息行字号略收 + 收起文件大小，保证「歌手·专辑·时长·音质·音源」完整显示在一行 */
   .trk .meta > span { font-size: 11px; }
   .trk .meta .sz { display: none; }
@@ -696,19 +698,21 @@ textarea:focus {
 .warn-tag { background: rgba(248, 113, 113, .18); color: #fca5a5; }
 
 /* ================= 搜索框 / 云盘歌曲纠错 ================= */
+/* 搜索框：全站统一尺寸（高约 40px，与 .btn.sm / 工具条下拉对齐），
+   各页只允许 .filterbar 内自动撑宽，其余一律同一宽度上限 */
 .searchbar {
-  display: flex; align-items: center; gap: 9px;
-  max-width: 340px; margin: 14px 0 10px; padding: 9px 13px;
-  border-radius: 13px; background: rgba(255, 255, 255, .06);
+  display: flex; align-items: center; gap: 10px;
+  max-width: 380px; margin: 14px 0 10px; padding: 11px 15px;
+  border-radius: 14px; background: rgba(255, 255, 255, .06);
   border: 1px solid var(--glass-border); transition: .2s;
 }
 .searchbar:focus-within { border-color: rgba(123, 140, 255, .55); background: rgba(255, 255, 255, .09); }
-.searchbar svg { width: 15px; height: 15px; flex: 0 0 15px; fill: none; stroke: currentColor;
+.searchbar svg { width: 16px; height: 16px; flex: 0 0 16px; fill: none; stroke: currentColor;
   stroke-width: 1.8; stroke-linecap: round; color: rgba(242, 245, 255, .5); }
 .searchbar input { flex: 1; min-width: 0; background: none; border: 0; padding: 0;
-  font-size: 13.5px; color: var(--text); outline: none; }
+  font-size: 14px; color: var(--text); outline: none; }
 .filterbar { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; margin: 14px 0 10px; }
-.filterbar .searchbar { margin: 0; }
+.filterbar .searchbar { margin: 0; flex: 1; max-width: none; }
 .cloud-edit { margin-bottom: 10px; }
 .cloud-edit .org-edit { margin-top: 0; }
 
