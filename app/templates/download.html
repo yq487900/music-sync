@@ -72,7 +72,6 @@
     <button class="btn sm" id="btn-select-all">全部勾选</button>
     <button class="btn sm" id="btn-unselect-all">全部取消</button>
     <span class="tb-sep"></span>
-    <button class="btn sm" id="btn-only-failed">只看失败</button>
     <button class="btn sm" id="btn-retry-failed">重试全部失败</button>
   </div>
   <!-- 失败汇总：按原因分组，让用户知道“为什么失败”而不只是“有几首失败” -->
@@ -377,11 +376,8 @@ async function loadFailedSummary() {
   if (!items.length) { box.hidden = true; box.innerHTML = ''; return; }
   box.hidden = false;
   box.innerHTML = '<span class="hint" style="align-self:center">共 ' + items.length
-    + ' 首失败 —— 失败原因已标在各自歌名后面，可用「只看失败」过滤查看</span>';
+    + ' 首失败 —— 失败原因已标在各自歌名后面，可在「曲目」下拉里选「失败」过滤查看</span>';
 }
-document.getElementById('btn-only-failed').onclick = function () {
-  ST.filter = 'failed'; ST.page = 1; load();
-};
 document.getElementById('btn-retry-failed').onclick = async function (e) {
   const btn = e.currentTarget;
   if (!FAILED_IDS.length) { toast('当前没有失败曲目', 'ok'); return; }
