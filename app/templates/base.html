@@ -70,6 +70,7 @@
 <!-- 全局任务中心：右下角常驻，聚合下载 / 上传 / 刷削三个队列 -->
 <button class="tc-fab" id="tc-fab" type="button" aria-expanded="false" aria-controls="tc-panel">
   <span class="tc-dot"></span><span id="tc-label">任务中心</span>
+  <span class="tc-badge" id="tc-badge" hidden></span>
 </button>
 <div class="tc-panel" id="tc-panel" role="dialog" aria-label="全局任务中心">
   <div class="tc-h"><strong>任务中心</strong>
@@ -326,6 +327,12 @@ function localCell(t) {
 }
 
 /** 云盘状态：白云=在云盘；白云+绿勾=在云盘且本地已有；红云+白感叹号=不在云盘；灰云=未知 */
+/** 曲目在本地库的自增 id：下载页给的是 id，歌单页给的是 track_id，两个都要认 */
+function trackKey(t) {
+  const a = (t.id != null && t.id !== 0 && t.id !== '') ? t.id : null;
+  if (a != null) return a;
+  return (t.track_id != null && t.track_id !== 0 && t.track_id !== '') ? t.track_id : null;
+}
 function cloudCell(t) {
   const tip = cloudTip();
   if (t.in_cloud === true) {
@@ -333,10 +340,14 @@ function cloudCell(t) {
                    : iconTip('ci-in', '在云盘（本地还没下载）' + tip, 'ic-cloud');
   }
   if (t.in_cloud === false) {
-    // 不在云盘 → 图标可点：弹「立即下载并转存云盘」（本地已有则直接上传）
-    if (t.id == null) return iconTip('ci-out', '不在云盘' + tip, 'ic-cloud-alert');
+    const tid = trackKey(t);
+    if (tid == null) {
+      // 这首歌还没进本地曲库（歌单页里 track_id=0）→ 说清楚下一步该干什么
+      return iconTip('ci-out',
+        '不在云盘；这首歌还没同步到本地曲库 —— 请先在歌单页点「同步」' + tip, 'ic-cloud-alert');
+    }
     return '<svg class="ci-icon ci-out ci-clickable" role="button" tabindex="0"'
-      + ' data-cloud-add="' + t.id + '" data-cloud-local="' + (t.local ? '1' : '') + '"'
+      + ' data-cloud-add="' + tid + '" data-cloud-local="' + (t.local ? '1' : '') + '"'
       + ' data-cloud-title="' + esc(t.title || '') + '">'
       + '<title>不在云盘' + tip + ' —— 点一下可立即' + (t.local ? '上传' : '下载并转存') + '到云盘</title>'
       + '<use href="#ic-cloud-alert"/></svg>';
@@ -467,6 +478,15 @@ function tcRender(s) {
     fab.classList.toggle('busy', active.length > 0 || running);
     fab.classList.toggle('err', active.length === 0 && !running && failedAll > 0);
   }
+  // FAB 右上角数字角标：正在进行（下载中 + 排队）的任务数
+  const doingCount = rows.reduce(function (a, r) {
+    return a + (r.o.downloading || 0) + (r.o.queued || 0);
+  }, 0);
+  const badge = document.getElementById('tc-badge');
+  if (badge) {
+    badge.hidden = !doingCount;
+    badge.textContent = doingCount > 99 ? '99+' : String(doingCount || '');
+  }
   if (lbl) {
     lbl.textContent = running ? '任务运行中'
       : active.length ? (active.length + ' 个队列进行中')
@@ -484,11 +504,11 @@ function tcRender(s) {
     const sub = r.total
       ? ('完成 ' + r.done + ' · 失败 ' + r.failed + ' · 待处理 ' + r.left)
       : '空闲';
-    return '<div class="tc-row' + (busy ? ' doing' : '') + '">'
+    return '<div class="tc-row' + (busy ? ' doing' : '') + (open ? ' open' : '') + '"'
+      + ' data-tcexp="' + r.d.k + '" role="button" tabindex="0"'
+      + ' aria-expanded="' + (open ? 'true' : 'false') + '"'
+      + ' title="点一下展开 / 收起歌曲明细">'
       + '<div class="tc-top">'
-      + '<button class="tc-exp" type="button" data-tcexp="' + r.d.k + '"'
-      + ' aria-expanded="' + (open ? 'true' : 'false') + '" title="展开 / 收起歌曲明细">'
-      + (open ? '\u25be' : '\u25b8') + '</button>'
       + '<span class="tc-t">' + r.d.name + '</span>'
       + '<span class="tc-n">' + r.done + '/' + r.total + ' ' + r.d.unit + '</span></div>'
       + '<small>' + sub + '</small>'
@@ -534,6 +554,8 @@ document.getElementById('legend-btn').onclick = openLegend;
 document.addEventListener('click', function (e) {
   const b = e.target.closest && e.target.closest('[data-tcexp]');
   if (!b) return;
+  // 行内的按钮 / 链接（如「查看 N 个失败」）不应当把行展开/收起
+  if (e.target.closest && e.target.closest('a, button')) return;
   const k = b.getAttribute('data-tcexp');
   TC_OPEN[k] = !TC_OPEN[k];
   if (TC_LAST) tcRender(TC_LAST);

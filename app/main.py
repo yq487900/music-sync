@@ -1079,7 +1079,7 @@ async def _cloud_all(cfg: Dict[str, Any]) -> List[Dict[str, Any]]:
 @app.get("/api/cloud")
 async def api_cloud(page: int = 1, size: int = 20, q: str = "", cover: str = "all",
                     album: str = "all", pl: str = "all", local: str = "all",
-                    fresh: int = 0):
+                    fresh: int = 0, sort: str = "", order: str = "asc"):
     """云盘歌曲列表：直接用云盘索引（全量在内存），支持搜索 + 筛选 + 状态图标
 
     筛选（all|yes|no）：cover=有没有封面（云盘条目的封面只能来自「匹配到正式曲目」，
@@ -1160,6 +1160,11 @@ async def api_cloud(page: int = 1, size: int = 20, q: str = "", cover: str = "al
         return True
 
     rows = [x for x in rows if keep(x)]
+    # 排序：sort=""=云盘原顺序；title=歌名；artist=歌手（中文按 Unicode 码位，非拼音）
+    _csrt = (sort or "").lower()
+    if _csrt in ("title", "artist"):
+        rows.sort(key=lambda x: str(x.get(_csrt) or "").lower(),
+                  reverse=(order or "asc").lower() == "desc")
     total = len(rows)
     pages = max(1, math.ceil(total / size)) if total else 1
     out = _slice(rows, page, size)
@@ -1169,7 +1174,8 @@ async def api_cloud(page: int = 1, size: int = 20, q: str = "", cover: str = "al
 
 
 @app.get("/api/cloud/local")
-async def api_cloud_local(page: int = 1, size: int = 20, q: str = ""):
+async def api_cloud_local(page: int = 1, size: int = 20, q: str = "",
+                          sort: str = "", order: str = "asc"):
     """本地已下载、待上传云盘的曲目"""
     page, size = _page_args(page, size, 20, 200)
     db = SessionLocal()
@@ -1212,6 +1218,10 @@ async def api_cloud_local(page: int = 1, size: int = 20, q: str = ""):
         x["has_cover"] = bool((row or {}).get("has_cover"))
         x["mtime"] = int((row or {}).get("mtime") or 0)
     items = [x for x in items if _hit(x, q, ("title", "artist", "album"))]
+    _lsrt = (sort or "").lower()
+    if _lsrt in ("title", "artist"):
+        items.sort(key=lambda x: str(x.get(_lsrt) or "").lower(),
+                   reverse=(order or "asc").lower() == "desc")
     out = _slice(items, page, size)
     return {**out, "q": q}
 

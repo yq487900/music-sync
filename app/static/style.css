@@ -872,3 +872,19 @@ a:focus-visible, button:focus-visible, [role="button"]:focus-visible,
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .tc-task small.tc-err { color: #fca5a5; }
 .tc-bar.sm { height: 4px; margin-top: 5px; }
+
+/* ================= 任务中心：整行可点 + FAB 数字角标 ================= */
+.tc-row[data-tcexp] { cursor: pointer; transition: background .18s ease, border-color .18s; }
+.tc-row[data-tcexp]:hover { background: rgba(255,255,255,.07); }
+.tc-row.open { border-color: rgba(123,140,255,.42); background: rgba(123,140,255,.08); }
+
+.tc-badge {
+  position: absolute; top: -5px; right: -5px;
+  min-width: 18px; height: 18px; padding: 0 5px;
+  border-radius: 999px; background: #ff3b30; color: #fff;
+  font-size: 11px; font-weight: 650; line-height: 18px; text-align: center;
+  box-shadow: 0 2px 8px rgba(255,59,48,.55);
+  border: 2px solid #0b0f1f;
+  box-sizing: content-box;
+  pointer-events: none;
+}

@@ -36,6 +36,16 @@
     <svg><use href="#ic-search"/></svg>
     <input id="qsearch-local" placeholder="搜歌名 / 歌手 / 专辑">
   </div>
+  <div class="btn-row" style="margin:10px 0 4px">
+    <span class="lbl" style="align-self:center;font-size:12px;color:var(--text-dim)">排序</span>
+    <select id="sort-local" class="src-sel" style="max-width:none" title="排序方式">
+      <option value=":asc">默认顺序</option>
+      <option value="title:asc">歌名 A→Z</option>
+      <option value="title:desc">歌名 Z→A</option>
+      <option value="artist:asc">歌手 A→Z</option>
+      <option value="artist:desc">歌手 Z→A</option>
+    </select>
+  </div>
   <div id="local-list"><div class="empty"><div class="big">⏳</div>正在加载…</div></div>
   <div class="pager" id="local-pager" style="display:none"></div>
 </div>
@@ -63,6 +73,16 @@
     <button class="chip" data-k="pl" data-v="yes" data-n="pl_yes">在<span class="n"></span></button>
     <button class="chip" data-k="pl" data-v="no" data-n="pl_no">不在<span class="n"></span></button>
   </div>
+  <div class="btn-row" style="margin:10px 0 4px">
+    <span class="lbl" style="align-self:center;font-size:12px;color:var(--text-dim)">排序</span>
+    <select id="sort-cloud" class="src-sel" style="max-width:none" title="排序方式">
+      <option value=":asc">云盘原顺序</option>
+      <option value="title:asc">歌名 A→Z</option>
+      <option value="title:desc">歌名 Z→A</option>
+      <option value="artist:asc">歌手 A→Z</option>
+      <option value="artist:desc">歌手 Z→A</option>
+    </select>
+  </div>
   <div id="cloud-list"><div class="empty"><div class="big">⏳</div>正在加载…</div></div>
   <div class="pager" id="cloud-pager" style="display:none"></div>
 </div>
@@ -71,9 +91,9 @@
 
 {% block script %}
 <script>
-const LS = {page: 1, size: 20, q: ''};
+const LS = {page: 1, size: 20, q: '', sort: '', order: 'asc'};
 // 云盘歌曲：cover=封面/信息（有/缺）、local=在不在本地、pl=在不在歌单
-const CS = {page: 1, size: 20, q: '', cover: 'all', local: 'all', pl: 'all'};
+const CS = {page: 1, size: 20, q: '', cover: 'all', local: 'all', pl: 'all', sort: '', order: 'asc'};
 let CS_FRESH = 1;                 // 打开页面第一次请求时让后端重新索引一遍云盘
 let ciWatch = 0;
 let ciLoaded = false;
@@ -149,9 +169,21 @@ function renderLocal(d) {
   });
 }
 
+/* 排序控件 */
+document.getElementById('sort-cloud').onchange = (e) => {
+  const i = e.target.value.indexOf(':');
+  CS.sort = e.target.value.slice(0, i); CS.order = e.target.value.slice(i + 1);
+  CS.page = 1; loadCloud();
+};
+document.getElementById('sort-local').onchange = (e) => {
+  const i = e.target.value.indexOf(':');
+  LS.sort = e.target.value.slice(0, i); LS.order = e.target.value.slice(i + 1);
+  LS.page = 1; loadLocal();
+};
 async function loadLocal() {
   const box = document.getElementById('local-list');
-  const r = await jsonReq(`/api/cloud/local?page=${LS.page}&size=${LS.size}&q=${encodeURIComponent(LS.q)}`);
+  const r = await jsonReq(`/api/cloud/local?page=${LS.page}&size=${LS.size}&q=${encodeURIComponent(LS.q)}`
+    + `&sort=${LS.sort}&order=${LS.order}`);
   if (!r.ok) { box.innerHTML = '<div class="empty">加载失败</div>'; return; }
   LS.page = r.data.page; LS.size = r.data.size;
   renderLocal(r.data);
@@ -393,7 +425,7 @@ function bindCloudEdit(host, item) {
 async function loadCloud() {
   const box = document.getElementById('cloud-list');
   const r = await jsonReq(`/api/cloud?page=${CS.page}&size=${CS.size}&q=${encodeURIComponent(CS.q)}`
-    + `&cover=${CS.cover}&local=${CS.local}&pl=${CS.pl}&fresh=${CS_FRESH}`);
+    + `&cover=${CS.cover}&local=${CS.local}&pl=${CS.pl}&sort=${CS.sort}&order=${CS.order}&fresh=${CS_FRESH}`);
   CS_FRESH = 0;                   // 只有打开页面那一次强制重索引
   if (!r.ok) {
     box.innerHTML = `<div class="empty"><div class="big">🔑</div>${esc(r.data.error || '加载失败')}
