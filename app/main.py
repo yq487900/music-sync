@@ -1669,14 +1669,19 @@ async def api_org_list(page: int = 1, size: int = 20, q: str = "",
     files = data["files"]
     listed = organize.list_items(files, q, page, size,
                                  {"tag": tag, "cover": cover, "lyric": lyric})
-    # 标出哪些文件是本工具下载入库的（其余是手动放进音乐库的）
+    # 标出哪些文件是本工具下载入库的（其余是手动放进音乐库的）；
+    # 同时标出哪些已经在云盘（cloud_state=uploaded）—— 整理页每行要显示云盘标识
     db = SessionLocal()
     try:
         known = {r[0] for r in db.query(Track.file_path)
                  .filter(Track.file_path.isnot(None)).all()}
+        cloud_paths = {r[0] for r in db.query(Track.file_path)
+                       .filter(Track.status == "ok", Track.cloud_state == "uploaded",
+                               Track.file_path.isnot(None)).all()}
     finally:
         db.close()
-    listed["items"] = [{**r, "in_db": r["path"] in known} for r in listed["items"]]
+    listed["items"] = [{**r, "in_db": r["path"] in known,
+                        "in_cloud": r["path"] in cloud_paths} for r in listed["items"]]
     return {"root": data["root"], "scanned": data["total"],
             "audit": organize.audit(files), **listed}
 

@@ -65,28 +65,34 @@
       <option value="artist:asc">歌手 A→Z</option>
       <option value="artist:desc">歌手 Z→A</option>
     </select>
+    <span class="tb-sep"></span>
+    <span class="lbl">封面/信息</span>
+    <select class="src-sel flt-sel" data-k="cover" title="封面/信息筛选">
+      <option value="all" data-n="total" data-label="全部">全部</option>
+      <option value="yes" data-n="cover_yes" data-label="有">有</option>
+      <option value="no" data-n="cover_no" data-label="缺">缺</option>
+    </select>
+
+    <span class="lbl">在本地</span>
+    <select class="src-sel flt-sel" data-k="local" title="在本地筛选">
+      <option value="all" data-n="total" data-label="全部">全部</option>
+      <option value="yes" data-n="local_yes" data-label="在">在</option>
+      <option value="no" data-n="local_no" data-label="不在">不在</option>
+    </select>
+
+    <span class="lbl">在歌单</span>
+    <select class="src-sel flt-sel" data-k="pl" title="在歌单筛选">
+      <option value="all" data-n="total" data-label="全部">全部</option>
+      <option value="yes" data-n="pl_yes" data-label="在">在</option>
+      <option value="no" data-n="pl_no" data-label="不在">不在</option>
+    </select>
+
     <div class="searchbar">
       <svg><use href="#ic-search"/></svg>
       <input id="qsearch-cloud" placeholder="搜整个云盘：歌名 / 歌手 / 专辑">
     </div>
   </div>
-  <div class="chips" id="chips">
-    <span class="lbl">封面/信息</span>
-    <button class="chip" data-k="cover" data-v="all" data-n="total">全部<span class="n"></span></button>
-    <button class="chip" data-k="cover" data-v="yes" data-n="cover_yes">有<span class="n"></span></button>
-    <button class="chip" data-k="cover" data-v="no" data-n="cover_no">缺<span class="n"></span></button>
-    <span class="sep"></span>
-    <span class="lbl">在本地</span>
-    <button class="chip" data-k="local" data-v="all" data-n="total">全部<span class="n"></span></button>
-    <button class="chip" data-k="local" data-v="yes" data-n="local_yes">在<span class="n"></span></button>
-    <button class="chip" data-k="local" data-v="no" data-n="local_no">不在<span class="n"></span></button>
-    <span class="sep"></span>
-    <span class="lbl">在歌单</span>
-    <button class="chip" data-k="pl" data-v="all" data-n="total">全部<span class="n"></span></button>
-    <button class="chip" data-k="pl" data-v="yes" data-n="pl_yes">在<span class="n"></span></button>
-    <button class="chip" data-k="pl" data-v="no" data-n="pl_no">不在<span class="n"></span></button>
-  </div>
-  <div class="toolrow">
+    <div class="toolrow">
     <button class="btn sm" id="cs-selpage">勾选本页</button>
     <button class="btn sm" id="cs-unselpage">取消本页</button>
     <span class="tb-sep"></span>
@@ -284,7 +290,9 @@ function renderCloud(d) {
   });
   box.querySelectorAll('[data-del]').forEach(b => {
     b.onclick = async () => {
-      if (!confirm('确定从云盘删除这首歌？')) return;
+      if (!(await confirmBox('从云盘删除',
+          '确定把这首歌从网易云云盘里删除吗？\n云盘里的文件会被移除，本地文件不受影响。',
+          '删除', true))) return;
       const r2 = await jsonReq('/api/cloud/' + encodeURIComponent(b.dataset.del), 'DELETE');
       if (!r2.ok) { toast(r2.data.error || '删除失败', 'err'); return; }
       toast('已从云盘删除', 'ok');
@@ -489,7 +497,7 @@ async function loadCloud() {
     watchCloudIndex();
     return;
   }
-  paintChips('chips', CS, r.data.counts);
+  paintFilters( CS, r.data.counts);
   renderCloud(r.data);
   watchCloudIndex();
 }
@@ -531,7 +539,9 @@ document.getElementById('cs-unselall').onclick = () => {
 document.getElementById('cs-download').onclick = async () => {
   const sids = [...CSEL];
   if (!sids.length) { toast('先勾选要下载的云盘歌曲', 'err'); return; }
-  if (sids.length > 50 && !confirm(`确定要把这 ${sids.length} 首加入下载队列吗？`)) return;
+  if (sids.length > 50 && !(await confirmBox('加入下载队列',
+      `确定要把这 ${sids.length} 首加入下载队列吗？数量较多，下载会持续一段时间。`,
+      '开始下载'))) return;
   const b = document.getElementById('cs-download');
   setBusy(b, true);
   const r = await jsonReq('/api/cloud/download', 'POST', {sids});
@@ -632,7 +642,7 @@ function bindSearch(id, st, reload) {
 bindSearch('qsearch-local', LS, loadLocal);
 bindSearch('qsearch-cloud', CS, loadCloud);
 // 云盘歌曲的筛选片：封面/信息、在本地、在歌单（组间是「并且」）
-bindChips('chips', CS, loadCloud);
+bindFilters( CS, loadCloud);
 
 /* ---------- 上传队列 ---------- */
 function renderQueue(q) {

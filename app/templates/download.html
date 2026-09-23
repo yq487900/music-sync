@@ -43,25 +43,29 @@
       <option value="artist:asc">歌手 A→Z</option>
       <option value="artist:desc">歌手 Z→A</option>
     </select>
+    <span class="tb-sep"></span>
+    <span class="lbl">曲目</span>
+    <select class="src-sel flt-sel" data-k="filter" title="曲目筛选">
+      <option value="all" data-n="total" data-label="全部">全部</option>
+      <option value="pending" data-n="local_no" data-label="未下载">未下载</option>
+      <option value="ok" data-n="local_yes" data-label="已下载">已下载</option>
+      <option value="failed" data-n="failed" data-label="失败">失败</option>
+      <option value="selected" data-n="selected" data-label="已勾选">已勾选</option>
+    </select>
+
+    <span class="lbl">云盘</span>
+    <select class="src-sel flt-sel" data-k="cloud" title="云盘筛选">
+      <option value="all" data-n="total" data-label="全部">全部</option>
+      <option value="in" data-n="cloud_in" data-label="在云盘">在云盘</option>
+      <option value="out" data-n="cloud_out" data-label="不在云盘">不在云盘</option>
+    </select>
+
     <div class="searchbar">
       <svg><use href="#ic-search"/></svg>
       <input id="qsearch" placeholder="搜歌名 / 歌手 / 专辑">
     </div>
   </div>
-  <div class="chips" id="chips">
-    <span class="lbl">曲目</span>
-    <button class="chip" data-k="filter" data-v="all" data-n="total">全部<span class="n"></span></button>
-    <button class="chip" data-k="filter" data-v="pending" data-n="local_no">未下载<span class="n"></span></button>
-    <button class="chip" data-k="filter" data-v="ok" data-n="local_yes">已下载<span class="n"></span></button>
-    <button class="chip" data-k="filter" data-v="failed" data-n="failed">失败<span class="n"></span></button>
-    <button class="chip" data-k="filter" data-v="selected" data-n="selected">已勾选<span class="n"></span></button>
-    <span class="sep"></span>
-    <span class="lbl">云盘</span>
-    <button class="chip" data-k="cloud" data-v="all" data-n="total">全部<span class="n"></span></button>
-    <button class="chip" data-k="cloud" data-v="in" data-n="cloud_in">在云盘<span class="n"></span></button>
-    <button class="chip" data-k="cloud" data-v="out" data-n="cloud_out">不在云盘<span class="n"></span></button>
-  </div>
-  <div class="toolrow">
+    <div class="toolrow">
     <button class="btn sm" id="btn-select-page">勾选本页</button>
     <button class="btn sm" id="btn-unselect-page">取消本页</button>
     <span class="tb-sep"></span>
@@ -121,7 +125,7 @@ function renderList(d) {
   document.getElementById('s-selected').textContent = d.selected + ' 首';
   SOURCES = d.sources || {};
   setCloudIndex(d.cloud_index);
-  paintChips('chips', ST, d.counts);
+  paintFilters( ST, d.counts);
   const box = document.getElementById('list');
   if (!d.items.length) {
     box.innerHTML = '<div class="empty"><div class="big">🎵</div>暂无曲目记录' +
@@ -295,7 +299,7 @@ async function pollQueue() {
 pollEvery(pollQueue, 2000);
 
 /* ---------- 筛选片 / 按钮 ---------- */
-bindChips('chips', ST, load);
+bindFilters( ST, load);
 
 // 搜索框：输入 400ms 后自动搜（回到第 1 页）
 let qsTimer = null;
@@ -330,8 +334,8 @@ document.getElementById('btn-pause-all').onclick = () =>
   bulk('/api/queue/pause-all', '已请求全部暂停');
 document.getElementById('btn-resume-all').onclick = () =>
   bulk('/api/queue/resume-all', '已请求全部继续');
-document.getElementById('btn-cancel-all').onclick = () => {
-  if (!confirm('确定取消所有未完成的下载任务？')) return;
+document.getElementById('btn-cancel-all').onclick = async () => {
+  if (!(await confirmBox('取消下载任务', '确定取消所有未完成的下载任务吗？', '全部取消', true))) return;
   bulk('/api/queue/cancel-all', '已取消全部任务');
 };
 document.getElementById('btn-clear').onclick = () => bulk('/api/queue/clear', '已清空已结束的任务');
@@ -381,7 +385,9 @@ document.getElementById('btn-only-failed').onclick = function () {
 document.getElementById('btn-retry-failed').onclick = async function (e) {
   const btn = e.currentTarget;
   if (!FAILED_IDS.length) { toast('当前没有失败曲目', 'ok'); return; }
-  if (!confirm('把 ' + FAILED_IDS.length + ' 首失败曲目重新加入下载队列？\n连续失败已进入退避的也会强制重试一次。')) return;
+  if (!(await confirmBox('重试失败曲目',
+      '把 ' + FAILED_IDS.length + ' 首失败曲目重新加入下载队列？\n连续失败已进入退避的也会强制重试一次。',
+      '重新加入'))) return;
   setBusy(btn, true);
   let ok = 0, bad = 0;
   try {

@@ -321,6 +321,34 @@ function openModal(title, bodyHtml, opts) {
   return back;
 }
 
+/** 统一确认浮层：替代浏览器原生 confirm（原生弹窗在深色玻璃界面里很突兀）。
+    用法：if (!(await confirmBox('标题', '正文', '删除', true))) return;
+    danger=true → 确认按钮用红色（删除 / 清空这类不可逆操作）。
+    正文里的换行靠 CSS white-space: pre-line 处理，不用 <br>。 */
+function confirmBox(title, msg, okText, danger) {
+  return new Promise((resolve) => {
+    const body = '<p class="cb-msg">' + esc(msg) + '</p>'
+      + '<div class="btn-row" style="margin-top:6px">'
+      + '<button class="btn" data-cb="no">取消</button>'
+      + '<button class="btn ' + (danger ? 'danger' : 'primary') + '" data-cb="yes">'
+      + esc(okText || '确定') + '</button></div>';
+    const back = openModal(title, body, {noClose: true});
+    let done = false;
+    const onKey = (e) => { if (e.key === 'Escape') finish(false); };
+    const finish = (v) => {
+      if (done) return;
+      done = true;
+      document.removeEventListener('keydown', onKey);
+      back.remove();
+      resolve(v);
+    };
+    document.addEventListener('keydown', onKey);
+    back.querySelector('[data-cb=no]').onclick = () => finish(false);
+    back.querySelector('[data-cb=yes]').onclick = () => finish(true);
+    back.onclick = (e) => { if (e.target === back) finish(false); };   // 点背景 = 取消
+  });
+}
+
 /** 没有封面时的占位块（内联 SVG，不用 emoji）；cls 默认 cov，歌单头图那里传 cover */
 function phBox(icon, tip, cls) {
   const c = cls || 'cov';
@@ -396,6 +424,31 @@ function bindChips(group, state, onChange) {
     };
   });
 }
+/* ---------- 筛选下拉（替代筛选片）：同组单选，组间叠加 ---------- */
+/** 每个 select 带 data-k（对应 state 的键）；option 的 value 是取值，
+    数量来自后端 counts（键写在 option 的 data-n 上），显示成「标签（数量）」 */
+function bindFilters(state, onChange) {
+  document.querySelectorAll('.flt-sel').forEach(sel => {
+    sel.onchange = () => {
+      state[sel.dataset.k] = sel.value;
+      state.page = 1;
+      onChange();
+    };
+  });
+}
+function paintFilters(state, counts) {
+  const c = counts || {};
+  document.querySelectorAll('.flt-sel').forEach(sel => {
+    if (state[sel.dataset.k] != null) sel.value = state[sel.dataset.k];
+    sel.querySelectorAll('option').forEach(op => {
+      const label = op.dataset.label || op.textContent;   // 首次调用时把纯文字存下
+      op.dataset.label = label;
+      const key = op.dataset.n;
+      op.textContent = (key && c[key] != null) ? label + '（' + c[key] + '）' : label;
+    });
+  });
+}
+
 /** 按 counts 刷新筛选片上的数字和选中态 */
 function paintChips(group, state, counts) {
   const box = document.getElementById(group);

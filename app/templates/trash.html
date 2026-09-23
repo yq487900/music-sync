@@ -133,7 +133,9 @@ async function doRestore(paths) {
 
 async function doPurge(paths) {
   if (!paths.length) { toast('先勾选要清空的歌', 'err'); return; }
-  if (!confirm(`确定要真正删除这 ${paths.length} 首本地文件吗？删了就找不回来了。`)) return;
+  if (!(await confirmBox('彻底删除',
+      `确定要真正删除这 ${paths.length} 首本地文件吗？\n删了就找不回来了。`,
+      '彻底删除', true))) return;
   const r = await jsonReq('/api/trash/purge', 'POST', {paths});
   if (!r.ok) { toast(r.data.error || '清空失败', 'err'); return; }
   const bad = (r.data.failed || []).length;
@@ -161,9 +163,10 @@ document.getElementById('btn-unselect-all').onclick = () => { SEL.clear(); rende
 document.getElementById('btn-refresh').onclick = () => { load(); toast('已刷新回收站', 'ok'); };
 document.getElementById('btn-restore-sel').onclick = () => doRestore([...SEL]);
 document.getElementById('btn-purge-sel').onclick = () => doPurge([...SEL]);
-document.getElementById('btn-restore-all').onclick = () => {
+document.getElementById('btn-restore-all').onclick = async () => {
   if (!allPaths.length) { toast('回收站是空的', 'err'); return; }
-  if (!confirm(`确定把回收站里全部 ${allPaths.length} 首恢复到音乐库吗？`)) return;
+  if (!(await confirmBox('全部恢复',
+      `确定把回收站里全部 ${allPaths.length} 首恢复到音乐库吗？`, '全部恢复'))) return;
   doRestore(allPaths);
 };
 document.getElementById('btn-purge-all').onclick = () => {

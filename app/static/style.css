@@ -192,8 +192,19 @@ h2 { font-size: 16px; margin: 0 0 4px; font-weight: 620; }
   color: #fff;
 }
 .btn.primary:hover { box-shadow: 0 12px 32px rgba(123,140,255,.5); }
+/* 危险操作（删除 / 清空 / 彻底删除）的确认按钮 */
+.btn.danger {
+  background: linear-gradient(135deg, #f87171, #ef4444);
+  border-color: rgba(255,255,255,.24);
+  box-shadow: 0 8px 26px rgba(248,113,113,.38);
+  color: #fff;
+}
+.btn.danger:hover { box-shadow: 0 12px 32px rgba(248,113,113,.5); }
 .btn[disabled] { opacity: .55; cursor: not-allowed; transform: none; }
 .btn-row { display: flex; gap: 12px; flex-wrap: wrap; margin-top: 4px; }
+/* 确认浮层的正文（换行交给 white-space，不用 <br>） */
+.cb-msg { margin: 0 0 4px; line-height: 1.75; font-size: 13.5px; color: var(--text-dim);
+  white-space: pre-line; }
 /* 按钮一律左对齐、按操作顺序连续排列。不做「左灰右紫」两端分区 ——
    两端分区要两头找按钮，反而割裂 */
 /* 次级小按钮：高度与工具条里的搜索框 / 排序下拉对齐，批量并排时尺寸一致
@@ -621,7 +632,7 @@ textarea:focus {
 /* 右侧：状态灯 + 三个按钮；按钮列宽度一致，各行对齐 */
 .trk .right.org {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto auto auto;
+  grid-template-columns: minmax(0, 1fr) auto auto auto 45px;   /* 状态 / 编辑 / 刮削 / 删除 / 云盘标识 */
   align-items: center;
   gap: 8px;
   justify-items: end;
@@ -670,7 +681,7 @@ textarea:focus {
 /* 窄屏：编辑面板单列，状态灯换到独立一行 */
 @media (max-width: 1100px) {
   .org-grid { grid-template-columns: minmax(0, 1fr); }
-  .trk .right.org { grid-template-columns: auto auto auto; grid-column: 1 / -1;
+  .trk .right.org { grid-template-columns: auto auto auto 45px; grid-column: 1 / -1;
     justify-items: start; margin-top: 4px; }
   .trk .right.org .st { grid-column: 1 / -1; grid-row: 1; justify-content: flex-start; }
 }
@@ -720,6 +731,7 @@ textarea:focus {
 .filterbar .lbl { font-size: 12px; color: var(--text-dim); white-space: nowrap; }
 .filterbar .src-sel { padding: 10px 14px; font-size: 13.5px; }
 .filterbar .searchbar { margin: 0; }
+.filterbar .tb-sep { width: 1px; height: 20px; background: var(--glass-border); margin: 0 3px; }
 .cloud-edit { margin-bottom: 10px; }
 .cloud-edit .org-edit { margin-top: 0; }
 

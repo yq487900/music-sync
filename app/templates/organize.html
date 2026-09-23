@@ -46,28 +46,34 @@
       <option value="artist:asc">歌手 A→Z</option>
       <option value="artist:desc">歌手 Z→A</option>
     </select>
+    <span class="tb-sep"></span>
+    <span class="lbl">标签</span>
+    <select class="src-sel flt-sel" data-k="tag" title="标签筛选">
+      <option value="all" data-n="total" data-label="全部">全部</option>
+      <option value="yes" data-n="tag_yes" data-label="有">有</option>
+      <option value="no" data-n="tag_no" data-label="缺">缺</option>
+    </select>
+
+    <span class="lbl">封面</span>
+    <select class="src-sel flt-sel" data-k="cover" title="封面筛选">
+      <option value="all" data-n="total" data-label="全部">全部</option>
+      <option value="yes" data-n="cover_yes" data-label="有">有</option>
+      <option value="no" data-n="cover_no" data-label="缺">缺</option>
+    </select>
+
+    <span class="lbl">歌词</span>
+    <select class="src-sel flt-sel" data-k="lyric" title="歌词筛选">
+      <option value="all" data-n="total" data-label="全部">全部</option>
+      <option value="yes" data-n="lyric_yes" data-label="有">有</option>
+      <option value="no" data-n="lyric_no" data-label="缺">缺</option>
+    </select>
+
     <div class="searchbar">
       <svg><use href="#ic-search"/></svg>
       <input id="q" placeholder="搜歌名 / 歌手 / 专辑 / 文件名，回车搜索">
     </div>
   </div>
-  <div class="chips" id="chips">
-    <span class="lbl">标签</span>
-    <button class="chip" data-k="tag" data-v="all" data-n="total">全部<span class="n"></span></button>
-    <button class="chip" data-k="tag" data-v="yes" data-n="tag_yes">有<span class="n"></span></button>
-    <button class="chip" data-k="tag" data-v="no" data-n="tag_no">缺<span class="n"></span></button>
-    <span class="sep"></span>
-    <span class="lbl">封面</span>
-    <button class="chip" data-k="cover" data-v="all" data-n="total">全部<span class="n"></span></button>
-    <button class="chip" data-k="cover" data-v="yes" data-n="cover_yes">有<span class="n"></span></button>
-    <button class="chip" data-k="cover" data-v="no" data-n="cover_no">缺<span class="n"></span></button>
-    <span class="sep"></span>
-    <span class="lbl">歌词</span>
-    <button class="chip" data-k="lyric" data-v="all" data-n="total">全部<span class="n"></span></button>
-    <button class="chip" data-k="lyric" data-v="yes" data-n="lyric_yes">有<span class="n"></span></button>
-    <button class="chip" data-k="lyric" data-v="no" data-n="lyric_no">缺<span class="n"></span></button>
-  </div>
-  <div class="toolrow">
+    <div class="toolrow">
     <button class="btn sm" id="btn-selpage">勾选本页</button>
     <button class="btn sm" id="btn-unselpage">取消本页</button>
     <span class="tb-sep"></span>
@@ -128,6 +134,7 @@ function rowHtml(t, i) {
       <button class="btn mini" data-act="edit"><svg><use href="#ic-edit"/></svg>编辑</button>
       <button class="btn mini" data-act="scrape"><svg><use href="#ic-spark"/></svg>刮削</button>
       <button class="btn mini" data-act="del"><svg><use href="#ic-trash"/></svg>删除</button>
+      ${cloudCell({in_cloud: !!t.in_cloud, local: true})}
     </span>
     <div class="org-edit" hidden></div>
   </div>`;
@@ -186,7 +193,9 @@ function bindRow(row) {
     load();
   };
   row.querySelector('[data-act=del]').onclick = async (e) => {
-    if (!confirm(`把「${t.title || baseName(t.name)}」移入回收站？\n文件不会立即删除，可在回收站找回。`)) return;
+    if (!(await confirmBox('移入回收站',
+        `把「${t.title || baseName(t.name)}」移入回收站？\n文件不会立即删除，可在回收站找回。`,
+        '移入回收站', true))) return;
     const b = e.currentTarget;
     setBusy(b, true);
     const r = await jsonReq('/api/organize/delete', 'POST', { paths: [t.path] });
@@ -500,7 +509,7 @@ async function pollQueue() {
 }
 
 // 筛选片：标签 / 封面 / 歌词 三组，各选有/缺，组间是「并且」
-bindChips('chips', ST, load);
+bindFilters( ST, load);
 
 // ---------------------------------------------------------------- 加载
 async function load() {
@@ -513,7 +522,7 @@ async function load() {
   itemsRaw = d.items || [];
   applySort();
   paintAudit(d.audit);
-  paintChips('chips', ST, d.counts);
+  paintFilters( ST, d.counts);
   render();
   renderPager(pager, {
     page: d.page, pages: d.pages, total: d.total, size: d.size,
@@ -591,7 +600,9 @@ document.getElementById('btn-scrapesel').onclick = async (e) => {
 };
 document.getElementById('btn-delsel').onclick = async (e) => {
   if (!SEL.size) { toast('请先勾选曲目', 'err'); return; }
-  if (!confirm(`把勾选的 ${SEL.size} 个文件移入回收站？\n文件不会立即删除，可在回收站找回。`)) return;
+  if (!(await confirmBox('批量移入回收站',
+      `把勾选的 ${SEL.size} 个文件移入回收站？\n文件不会立即删除，可在回收站找回。`,
+      '移入回收站', true))) return;
   const b = e.currentTarget;
   setBusy(b, true);
   const r = await jsonReq('/api/organize/delete', 'POST', { paths: [...SEL] });

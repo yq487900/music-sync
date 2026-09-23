@@ -34,23 +34,27 @@
       <option value="artist:asc">歌手 A→Z</option>
       <option value="artist:desc">歌手 Z→A</option>
     </select>
+    <span class="tb-sep"></span>
+    <span class="lbl">本地</span>
+    <select class="src-sel flt-sel" data-k="local" title="本地筛选">
+      <option value="all" data-n="total" data-label="全部">全部</option>
+      <option value="yes" data-n="local_yes" data-label="已下载">已下载</option>
+      <option value="no" data-n="local_no" data-label="未下载">未下载</option>
+    </select>
+
+    <span class="lbl">云盘</span>
+    <select class="src-sel flt-sel" data-k="cloud" title="云盘筛选">
+      <option value="all" data-n="total" data-label="全部">全部</option>
+      <option value="in" data-n="cloud_in" data-label="在云盘">在云盘</option>
+      <option value="out" data-n="cloud_out" data-label="不在云盘">不在云盘</option>
+    </select>
+
     <div class="searchbar">
       <svg><use href="#ic-search"/></svg>
       <input id="qsearch" placeholder="搜歌名 / 歌手 / 专辑">
     </div>
   </div>
-  <div class="chips" id="chips">
-    <span class="lbl">本地</span>
-    <button class="chip" data-k="local" data-v="all" data-n="total">全部<span class="n"></span></button>
-    <button class="chip" data-k="local" data-v="yes" data-n="local_yes">已下载<span class="n"></span></button>
-    <button class="chip" data-k="local" data-v="no" data-n="local_no">未下载<span class="n"></span></button>
-    <span class="sep"></span>
-    <span class="lbl">云盘</span>
-    <button class="chip" data-k="cloud" data-v="all" data-n="total">全部<span class="n"></span></button>
-    <button class="chip" data-k="cloud" data-v="in" data-n="cloud_in">在云盘<span class="n"></span></button>
-    <button class="chip" data-k="cloud" data-v="out" data-n="cloud_out">不在云盘<span class="n"></span></button>
-  </div>
-  <div class="toolrow">
+    <div class="toolrow">
     <button class="btn sm" id="btn-selpage">全选本页</button>
     <button class="btn sm" id="btn-unselpage">取消本页</button>
     <span class="tb-sep"></span>
@@ -106,7 +110,7 @@ function render(d) {
   }
   SOURCES = d.sources || {};
   setCloudIndex(d.cloud_index);
-  paintChips('chips', ST, d.counts);
+  paintFilters( ST, d.counts);
   const box = document.getElementById('tracks');
   if (!d.items.length) {
     box.innerHTML = '<div class="empty"><div class="big">🎵</div>这个歌单是空的</div>';
@@ -286,7 +290,7 @@ async function fillPlaylist(dryOnly) {
     if (d.download_titles.length) msg += `\n\n要下载：${d.download_titles.join('、')}${more(d.download)}`;
     if (d.upload_titles.length) msg += `\n要补传：${d.upload_titles.join('、')}${more(d.upload)}`;
     msg += '\n\n现在按这个清单补齐吗？（下载完按「下载后自动上传云盘」开关处理）';
-    if (!confirm(msg)) return null;
+    if (!(await confirmBox('扫描补齐这个歌单', msg, '开始补齐'))) return null;
     return fillPlaylist(false);
   }
   const left = d.left ? `（还有 ${d.left} 首，点一次补一批）` : '';
@@ -368,7 +372,7 @@ fetch('/api/status').then(r => r.json()).then(s => {
 });
 
 // 筛选片：本地 / 云盘 两组，点一下只看那一类（组间叠加）
-bindChips('chips', ST, load);
+bindFilters( ST, load);
 
 // 搜索框：输入 400ms 后自动搜（回到第 1 页）
 (function () {
