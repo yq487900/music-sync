@@ -31,10 +31,9 @@
 <div class="card">
   <h2>待上传的本地歌曲</h2>
   <p class="sub">已下载到本地、还没进云盘的歌曲。</p>
-  <!-- 排序与搜索并排一行（排序在前），用现成的 .filterbar 容器 -->
   <div class="filterbar">
-    <span class="lbl" style="font-size:12px;color:var(--text-dim);white-space:nowrap">排序</span>
-    <select id="sort-local" class="src-sel" style="max-width:none;flex:0 0 auto" title="排序方式">
+    <span class="lbl">排序</span>
+    <select id="sort-local" class="src-sel" style="max-width:none" title="排序方式">
       <option value=":asc">默认顺序</option>
       <option value="time:asc">加入时间 早→晚</option>
       <option value="time:desc">加入时间 晚→早</option>
@@ -43,7 +42,7 @@
       <option value="artist:asc">歌手 A→Z</option>
       <option value="artist:desc">歌手 Z→A</option>
     </select>
-    <div class="searchbar" style="min-width:220px">
+    <div class="searchbar">
       <svg><use href="#ic-search"/></svg>
       <input id="qsearch-local" placeholder="搜歌名 / 歌手 / 专辑">
     </div>
@@ -55,9 +54,21 @@
 <div class="card">
   <h2>云盘歌曲</h2>
   <p class="sub">网易云匹配错了？点每首歌的「编辑」，输入正确的网易云歌曲 ID 点「匹配」即可纠正。</p>
-  <div class="searchbar">
-    <svg><use href="#ic-search"/></svg>
-    <input id="qsearch-cloud" placeholder="搜整个云盘：歌名 / 歌手 / 专辑">
+  <div class="filterbar">
+    <span class="lbl">排序</span>
+    <select id="sort-cloud" class="src-sel" style="max-width:none" title="排序方式">
+      <option value=":asc">云盘原顺序</option>
+      <option value="time:asc">加入时间 早→晚</option>
+      <option value="time:desc">加入时间 晚→早</option>
+      <option value="title:asc">歌名 A→Z</option>
+      <option value="title:desc">歌名 Z→A</option>
+      <option value="artist:asc">歌手 A→Z</option>
+      <option value="artist:desc">歌手 Z→A</option>
+    </select>
+    <div class="searchbar">
+      <svg><use href="#ic-search"/></svg>
+      <input id="qsearch-cloud" placeholder="搜整个云盘：歌名 / 歌手 / 专辑">
+    </div>
   </div>
   <div class="chips" id="chips">
     <span class="lbl">封面/信息</span>
@@ -74,18 +85,6 @@
     <button class="chip" data-k="pl" data-v="all" data-n="total">全部<span class="n"></span></button>
     <button class="chip" data-k="pl" data-v="yes" data-n="pl_yes">在<span class="n"></span></button>
     <button class="chip" data-k="pl" data-v="no" data-n="pl_no">不在<span class="n"></span></button>
-  </div>
-  <div class="toolrow">
-    <span class="lbl">排序</span>
-    <select id="sort-cloud" class="src-sel" style="max-width:none" title="排序方式">
-      <option value=":asc">云盘原顺序</option>
-      <option value="time:asc">加入时间 早→晚</option>
-      <option value="time:desc">加入时间 晚→早</option>
-      <option value="title:asc">歌名 A→Z</option>
-      <option value="title:desc">歌名 Z→A</option>
-      <option value="artist:asc">歌手 A→Z</option>
-      <option value="artist:desc">歌手 Z→A</option>
-    </select>
   </div>
   <div id="cloud-list"><div class="empty"><div class="big">⏳</div>正在加载…</div></div>
   <div class="pager" id="cloud-pager" style="display:none"></div>

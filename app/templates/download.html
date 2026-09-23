@@ -33,6 +33,15 @@
 <div class="card">
   <h2>曲目列表</h2>
   <div class="filterbar">
+    <span class="lbl">排序</span>
+    <select id="sort-sel" class="src-sel" style="max-width:none" title="列表排序方式">
+      <option value="time:desc">加入时间 晚→早</option>
+      <option value="time:asc">加入时间 早→晚</option>
+      <option value="title:asc">歌名 A→Z</option>
+      <option value="title:desc">歌名 Z→A</option>
+      <option value="artist:asc">歌手 A→Z</option>
+      <option value="artist:desc">歌手 Z→A</option>
+    </select>
     <div class="searchbar">
       <svg><use href="#ic-search"/></svg>
       <input id="qsearch" placeholder="搜歌名 / 歌手 / 专辑">
@@ -52,16 +61,6 @@
     <button class="chip" data-k="cloud" data-v="out" data-n="cloud_out">不在云盘<span class="n"></span></button>
   </div>
   <div class="toolrow">
-    <span class="lbl">排序</span>
-    <select id="sort-sel" class="src-sel" style="max-width:none" title="列表排序方式">
-      <option value="time:desc">加入时间 晚→早</option>
-      <option value="time:asc">加入时间 早→晚</option>
-      <option value="title:asc">歌名 A→Z</option>
-      <option value="title:desc">歌名 Z→A</option>
-      <option value="artist:asc">歌手 A→Z</option>
-      <option value="artist:desc">歌手 Z→A</option>
-    </select>
-    <span class="tb-sep"></span>
     <button class="btn sm" id="btn-select-page">勾选本页</button>
     <button class="btn sm" id="btn-unselect-page">取消本页</button>
     <span class="tb-sep"></span>

@@ -35,9 +35,19 @@
 <!-- ===================== 曲库曲目 ===================== -->
 <div class="card">
   <h2>曲库曲目</h2>
-  <div class="searchbar">
-    <svg><use href="#ic-search"/></svg>
-    <input id="q" placeholder="搜歌名 / 歌手 / 专辑 / 文件名，回车搜索">
+  <div class="filterbar">
+    <span class="lbl">排序</span>
+    <select id="sort-sel" class="src-sel" style="max-width:none" title="排序方式">
+      <option value=":asc">默认顺序</option>
+      <option value="title:asc">歌名 A→Z</option>
+      <option value="title:desc">歌名 Z→A</option>
+      <option value="artist:asc">歌手 A→Z</option>
+      <option value="artist:desc">歌手 Z→A</option>
+    </select>
+    <div class="searchbar">
+      <svg><use href="#ic-search"/></svg>
+      <input id="q" placeholder="搜歌名 / 歌手 / 专辑 / 文件名，回车搜索">
+    </div>
   </div>
   <div class="chips" id="chips">
     <span class="lbl">标签</span>
@@ -56,15 +66,6 @@
     <button class="chip" data-k="lyric" data-v="no" data-n="lyric_no">缺<span class="n"></span></button>
   </div>
   <div class="toolrow">
-    <span class="lbl">排序</span>
-    <select id="sort-sel" class="src-sel" style="max-width:none" title="排序方式">
-      <option value=":asc">默认顺序</option>
-      <option value="title:asc">歌名 A→Z</option>
-      <option value="title:desc">歌名 Z→A</option>
-      <option value="artist:asc">歌手 A→Z</option>
-      <option value="artist:desc">歌手 Z→A</option>
-    </select>
-    <span class="tb-sep"></span>
     <button class="btn sm" id="btn-selpage">勾选本页</button>
     <button class="btn sm" id="btn-unselpage">取消本页</button>
     <span class="tb-sep"></span>
