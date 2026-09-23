@@ -539,7 +539,7 @@ document.getElementById('cs-download').onclick = async () => {
   if (!r.ok) { toast(r.data.error || '无法开始下载', 'err'); return; }
   const parts = [];
   if (r.data.skipped) parts.push(`${r.data.skipped} 首本地已有`);
-  if (r.data.unmatched) parts.push(`${r.data.unmatched} 首未匹配已跳过`);
+  if (r.data.unmatched) parts.push(`${r.data.unmatched} 首未匹配到歌曲信息`);
   const extra = parts.length ? `（${parts.join('、')}）` : '';
   toast(r.data.queued ? `已加入下载队列 ${r.data.queued} 首${extra}`
                       : `没有可下载的${extra || '（本地都已经有了）'}`, 'ok');

@@ -1280,18 +1280,11 @@ async def api_cloud_download(request: Request):
     if not sids:
         return JSONResponse({"error": "没有选中要下载的云盘歌曲"}, status_code=400)
     ci = cloud_index.index
-    ok_sids, unmatched = [], []
-    for x in sids:
-        if x.isdigit() and (not ci.ready or x in ci.sids):
-            ok_sids.append(x)
-        else:
-            unmatched.append(x)
-    if not ok_sids:      # 全都没匹配上才报错；部分未匹配的跳过就好（勾选全部时很常见）
-        return JSONResponse(
-            {"error": "选中的 %d 首都还没匹配到正式曲目（网易云没认出它的音频），取不到下载地址；"
-                      "先点「编辑 → 搜索 / 按 ID 匹配」再下载" % len(unmatched)},
-            status_code=400)
-    sids = ok_sids
+    # 未匹配到正式曲目的条目**也照样下载**：它的 sid 是云盘条目自带的 songId，
+    # 网易云对云盘文件同样能返回播放直链（只是元数据差、文件名可能不好听）。
+    # 这里只统计数量，给前端做提示，不再拦。
+    unmatched = [x for x in sids
+                 if not (x.isdigit() and (not ci.ready or x in ci.sids))]
     meta = {str(x.get("sid")): x for x in ci.items}
     cfg = config.load()
     queued = []
@@ -1306,8 +1299,8 @@ async def api_cloud_download(request: Request):
             if tr is None:      # 别处（手机/客户端）传的云盘歌：本地没记录，从云盘元数据建一条
                 x = meta.get(sid) or {}
                 tr = Track(platform="netease", platform_track_id=sid,
-                           title=str(x.get("title") or ""),
-                           artist=str(x.get("artist") or ""),
+                           title=str(x.get("title") or ("云盘歌曲 " + sid)),
+                           artist=str(x.get("artist") or "未知歌手"),
                            album=str(x.get("album") or ""),
                            duration=float(x.get("duration") or 0),
                            pic_url=str(x.get("cover") or ""),
