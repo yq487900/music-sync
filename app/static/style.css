@@ -417,16 +417,21 @@ label.switch .lbl em { display: block; font-style: normal; font-size: 12px; colo
   flex-wrap: nowrap;
 }
 .trk .right.ops .src-sel { width: 136px; max-width: 136px; }
-/* 云盘页每行：状态小标 / 编辑 / 删除 / 💾 / ☁ / 歌单 */
+/* 云盘页每行：编辑 / 下载 / 删除 / 💾 / ☁ / 歌单 —— 全是固定列宽。
+   以前第一列是 minmax(0, auto) 放「本工具上传」小标，而 grid 列宽是**每行各自**
+   计算的，所以没有该标的行会把编辑按钮顶到不同位置（对不齐）。
+   现在小标放进信息区（.meta 里的 .tag-us），右侧只剩固定列，行行对齐。 */
 .trk .right.cld {
   display: grid;
-  grid-template-columns: minmax(0, auto) 72px 72px 45px 45px 45px;
+  grid-template-columns: 72px 72px 72px 45px 45px 45px;
   align-items: center;
   gap: 8px;
   justify-items: end;
   flex-wrap: nowrap;
 }
 .trk .right.cld .btn { white-space: nowrap; }
+/* 信息区里的「本工具上传」小标（从右侧按钮列移过来的） */
+.trk .meta > .tag-us { display: inline-flex; margin-top: 4px; font-size: 11.5px; padding: 2px 9px; }
 /* 曲目行右侧的状态图标（💾 本地 / ☁ 云盘 / 歌单）。都是 45px，每行排成一竖线
    💾=已在本地；💾+红感叹号=本地没有；白云=在云盘；白云+绿勾=在云盘且本地有；
    红云+白感叹号=不在云盘；歌单图标：白=在歌单，红+白感叹号=不在歌单，灰=认不出是哪首 */

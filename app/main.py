@@ -1167,7 +1167,8 @@ async def _cloud_all(cfg: Dict[str, Any]) -> List[Dict[str, Any]]:
 @app.get("/api/cloud")
 async def api_cloud(page: int = 1, size: int = 20, q: str = "", cover: str = "all",
                     album: str = "all", pl: str = "all", local: str = "all",
-                    fresh: int = 0, sort: str = "", order: str = "asc"):
+                    fresh: int = 0, sort: str = "", order: str = "asc",
+                    want_sids: int = 0):
     """云盘歌曲列表：直接用云盘索引（全量在内存），支持搜索 + 筛选 + 状态图标
 
     筛选（all|yes|no）：cover=有没有封面（云盘条目的封面只能来自「匹配到正式曲目」，
@@ -1258,9 +1259,76 @@ async def api_cloud(page: int = 1, size: int = 20, q: str = "", cover: str = "al
     total = len(rows)
     pages = max(1, math.ceil(total / size)) if total else 1
     out = _slice(rows, page, size)
-    return {"items": out["items"], "page": page, "size": size, "pages": pages,
-            "total": total, "count": ci.count, "counts": counts, "q": q,
-            "cloud_index": ci.status(), "playlist_index": pj.status()}
+    ret = {"items": out["items"], "page": page, "size": size, "pages": pages,
+           "total": total, "count": ci.count, "counts": counts, "q": q,
+           "cloud_index": ci.status(), "playlist_index": pj.status()}
+    if want_sids:      # 「勾选全部」用：当前筛选结果的全部 sid（不受分页限制）
+        ret["all_sids"] = [str(x.get("sid") or "") for x in rows if x.get("sid")]
+    return ret
+
+
+@app.post("/api/cloud/download")
+async def api_cloud_download(request: Request):
+    """把云盘歌曲下载回本地（云盘页每行的「下载」/ 工具条的「下载勾选的」）
+
+    body.sids = 云盘条目的 sid 列表。只有**匹配到正式曲目**（sid 就是网易云歌曲 id）
+    的条目才取得到直链；未匹配条目的 sid 是云盘记录 id，得先「编辑 → 匹配」。
+    本地已经有文件的会跳过。
+    """
+    body = await _body(request)
+    sids = [str(x) for x in (body.get("sids") or []) if str(x)]
+    if not sids:
+        return JSONResponse({"error": "没有选中要下载的云盘歌曲"}, status_code=400)
+    ci = cloud_index.index
+    ok_sids, unmatched = [], []
+    for x in sids:
+        if x.isdigit() and (not ci.ready or x in ci.sids):
+            ok_sids.append(x)
+        else:
+            unmatched.append(x)
+    if not ok_sids:      # 全都没匹配上才报错；部分未匹配的跳过就好（勾选全部时很常见）
+        return JSONResponse(
+            {"error": "选中的 %d 首都还没匹配到正式曲目（网易云没认出它的音频），取不到下载地址；"
+                      "先点「编辑 → 搜索 / 按 ID 匹配」再下载" % len(unmatched)},
+            status_code=400)
+    sids = ok_sids
+    meta = {str(x.get("sid")): x for x in ci.items}
+    cfg = config.load()
+    queued = []
+    skipped = 0
+    failed = 0
+    db = SessionLocal()
+    try:
+        for sid in sids:
+            tr = (db.query(Track)
+                  .filter((Track.platform_track_id == sid) | (Track.cloud_sid == sid))
+                  .first())
+            if tr is None:      # 别处（手机/客户端）传的云盘歌：本地没记录，从云盘元数据建一条
+                x = meta.get(sid) or {}
+                tr = Track(platform="netease", platform_track_id=sid,
+                           title=str(x.get("title") or ""),
+                           artist=str(x.get("artist") or ""),
+                           album=str(x.get("album") or ""),
+                           duration=float(x.get("duration") or 0),
+                           pic_url=str(x.get("cover") or ""),
+                           cloud_sid=sid, cloud_state="uploaded",
+                           status="new", downloaded=False)
+                db.add(tr)
+                db.commit()
+                db.refresh(tr)
+            if tr.status == "ok" and tr.file_path and Path(tr.file_path).exists():
+                skipped += 1
+                continue
+            queued.append(int(tr.id))
+    finally:
+        db.close()
+    for tid in queued:
+        try:
+            enqueue_download_one(tid, cfg)
+        except Exception:  # noqa: BLE001
+            failed += 1
+    return {"ok": True, "queued": len(queued) - failed, "skipped": skipped,
+            "failed": failed, "unmatched": len(unmatched)}
 
 
 @app.get("/api/cloud/local")

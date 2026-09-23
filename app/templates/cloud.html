@@ -86,6 +86,16 @@
     <button class="chip" data-k="pl" data-v="yes" data-n="pl_yes">在<span class="n"></span></button>
     <button class="chip" data-k="pl" data-v="no" data-n="pl_no">不在<span class="n"></span></button>
   </div>
+  <div class="toolrow">
+    <button class="btn sm" id="cs-selpage">勾选本页</button>
+    <button class="btn sm" id="cs-unselpage">取消本页</button>
+    <span class="tb-sep"></span>
+    <button class="btn sm" id="cs-selall">勾选全部</button>
+    <button class="btn sm" id="cs-unselall">取消全部</button>
+    <span class="tb-sep"></span>
+    <button class="btn sm primary" id="cs-download"><svg><use href="#ic-down"/></svg>下载勾选的</button>
+    <button class="btn sm" id="cs-addpl"><svg><use href="#ic-plus"/></svg>添加到歌单</button>
+  </div>
   <div id="cloud-list"><div class="empty"><div class="big">⏳</div>正在加载…</div></div>
   <div class="pager" id="cloud-pager" style="display:none"></div>
 </div>
@@ -98,6 +108,8 @@ const LS = {page: 1, size: 20, q: '', sort: '', order: 'asc'};
 // 云盘歌曲：cover=封面/信息（有/缺）、local=在不在本地、pl=在不在歌单
 const CS = {page: 1, size: 20, q: '', cover: 'all', local: 'all', pl: 'all', sort: '', order: 'asc'};
 let CS_FRESH = 1;                 // 打开页面第一次请求时让后端重新索引一遍云盘
+const CSEL = new Set();           // 云盘页勾选的 sid（纯前端，不落库）
+let curCloud = [];                // 当前页的云盘条目（供「勾选本页」用）
 let ciWatch = 0;
 let ciLoaded = false;
 const NO_INFO_TIP = '网易云数据库里没有这首歌的信息（周杰伦的一些歌就是这样），'
@@ -202,8 +214,8 @@ function renderCloud(d) {
     return;
   }
   box.innerHTML = d.items.map(t => `
-    <div class="trk">
-      <span class="no"></span>
+    <div class="trk row-click" data-sid="${esc(t.sid)}">
+      <span class="no"><input type="checkbox" class="sel" title="勾选参与批量操作"></span>
       ${t.cover && t.has_cover
           ? `<img class="cov" src="${esc(t.cover)}" alt="" loading="lazy">`
           : phBox('ic-no-cover', NO_INFO_TIP)}
@@ -212,10 +224,11 @@ function renderCloud(d) {
         <span>${esc(t.artist)}${t.album ? ' · ' + esc(t.album) : ''}
           ${t.duration ? ' · ' + fmtDur(t.duration) : ''}
           ${t.file_size ? ' · ' + fmtSize(t.file_size) : ''}</span>
+        ${t.from_us ? '<span class="pill tag-us"><span class="dot-i"></span>本工具上传</span>' : ''}
       </span>
       <span class="right cld">
-        ${t.from_us ? '<span class="pill"><span class="dot-i"></span>本工具上传</span>' : ''}
         <button class="btn mini" data-edit="${esc(t.sid)}">编辑</button>
+        <button class="btn mini" data-dl="${esc(t.sid)}">下载</button>
         <button class="btn mini" data-del="${esc(t.sid)}">删除</button>
         ${localCell({local: t.in_local})}
         ${cloudCell({in_cloud: true, local: t.in_local})}
@@ -241,8 +254,33 @@ function renderCloud(d) {
     el.onclick = () => {
       const btn = el.closest('.trk').querySelector('[data-edit]');
       const item = d.items.find(x => String(x.sid) === String(btn.dataset.edit));
-      if (item) addToPlaylists(item);
+      if (item) addToPlaylists([item]);
     };
+  });
+  // 行内「下载」：把这首云盘歌下回本地
+  box.querySelectorAll('[data-dl]').forEach(b => {
+    b.onclick = async () => {
+      setBusy(b, true);
+      const r2 = await jsonReq('/api/cloud/download', 'POST', {sids: [String(b.dataset.dl)]});
+      setBusy(b, false);
+      if (!r2.ok) { toast(r2.data.error || '无法开始下载', 'err'); return; }
+      toast(r2.data.skipped ? '本地已经有这首了，跳过' : '已加入下载队列', 'ok');
+      if (!r2.data.skipped) pollQueue();
+    };
+  });
+  // 勾选框（纯前端）+ 点整行切换勾选
+  curCloud = d.items;
+  box.querySelectorAll('.trk').forEach(row => {
+    const cb = row.querySelector('.sel');
+    if (!cb) return;
+    const sid = String(row.dataset.sid || '');
+    cb.checked = CSEL.has(sid);
+    cb.onchange = () => { if (cb.checked) CSEL.add(sid); else CSEL.delete(sid); };
+    row.addEventListener('click', (e) => {
+      if (e.target.closest('.right, input, select, button, a')) return;
+      cb.checked = !cb.checked;
+      cb.dispatchEvent(new Event('change', {bubbles: true}));
+    });
   });
   box.querySelectorAll('[data-del]').forEach(b => {
     b.onclick = async () => {
@@ -262,7 +300,12 @@ function renderCloud(d) {
 }
 
 /* ---------- 加到歌单（点云盘页「不在歌单」图标） ---------- */
-async function addToPlaylists(item) {
+async function addToPlaylists(items) {
+  // 支持传单首 item、item 数组、或 sid 字符串数组
+  const list = (Array.isArray(items) ? items : [items]).map(x =>
+    (typeof x === 'string' || typeof x === 'number') ? {sid: String(x)} : x);
+  const sids = list.map(x => String(x.sid)).filter(Boolean);
+  if (!sids.length) { toast('没有要加入的歌曲', 'err'); return; }
   const r = await jsonReq('/api/account/playlists?page=1&size=100');
   if (!r.ok) { toast(r.data.error || '读取歌单失败', 'err'); return; }
   const pls = (r.data.items || []).filter(p => p && p.id);
@@ -272,7 +315,10 @@ async function addToPlaylists(item) {
         <span class="pl-name">${esc(p.name || p.id)}</span>
         <span class="hint">${p.total || 0} 首</span>
       </label>`).join('');
-  const back = openModal(`把「${item.title || item.sid}」加到歌单`,
+  const head = (list.length === 1 && list[0].title)
+    ? `把「${list[0].title}」加到歌单`
+    : `把选中的 ${sids.length} 首歌加到歌单`;
+  const back = openModal(head,
     `<div class="searchbar" style="margin-bottom:10px">
        <svg><use href="#ic-search"/></svg>
        <input id="plq" placeholder="搜歌单名（共 ${pls.length} 个歌单）">
@@ -297,7 +343,7 @@ async function addToPlaylists(item) {
     const pids = [...back.querySelectorAll('#plpick input:checked')].map(x => x.value);
     if (!pids.length) { toast('先勾选要加入的歌单', 'err'); return; }
     const rr = await jsonReq('/api/playlists/add-tracks', 'POST',
-                             {pids, sids: [String(item.sid)]});
+                             {pids, sids});
     if (!rr.ok) { toast(rr.data.error || '加入失败', 'err'); return; }
     const bad = (rr.data.failed || []);
     toast(bad.length ? `已加入 ${rr.data.count} 个歌单，${bad.length} 个失败：${bad[0].msg}`
@@ -447,6 +493,62 @@ async function loadCloud() {
   renderCloud(r.data);
   watchCloudIndex();
 }
+
+/* ---------- 云盘页勾选 / 批量下载 / 批量加歌单 ---------- */
+function paintCloudSel() {
+  document.querySelectorAll('#cloud-list .trk').forEach(row => {
+    const cb = row.querySelector('.sel');
+    if (cb) cb.checked = CSEL.has(String(row.dataset.sid || ''));
+  });
+}
+function cloudQuery(extra) {
+  return `page=1&size=1&q=${encodeURIComponent(CS.q)}&cover=${CS.cover}`
+    + `&local=${CS.local}&pl=${CS.pl}&sort=${CS.sort}&order=${CS.order}&fresh=0` + (extra || '');
+}
+document.getElementById('cs-selpage').onclick = () => {
+  curCloud.forEach(t => CSEL.add(String(t.sid)));
+  paintCloudSel();
+  toast(`本页 ${curCloud.length} 首已勾选`, 'ok');
+};
+document.getElementById('cs-unselpage').onclick = () => {
+  curCloud.forEach(t => CSEL.delete(String(t.sid)));
+  paintCloudSel();
+  toast('已取消本页勾选', 'ok');
+};
+document.getElementById('cs-selall').onclick = async () => {
+  const r = await jsonReq('/api/cloud?' + cloudQuery('&want_sids=1'));
+  if (!r.ok) { toast(r.data.error || '操作失败', 'err'); return; }
+  CSEL.clear();
+  (r.data.all_sids || []).forEach(x => CSEL.add(String(x)));
+  paintCloudSel();
+  toast(`已勾选 ${CSEL.size} 首（当前筛选结果）`, 'ok');
+};
+document.getElementById('cs-unselall').onclick = () => {
+  CSEL.clear();
+  paintCloudSel();
+  toast('已清空勾选', 'ok');
+};
+document.getElementById('cs-download').onclick = async () => {
+  const sids = [...CSEL];
+  if (!sids.length) { toast('先勾选要下载的云盘歌曲', 'err'); return; }
+  if (sids.length > 50 && !confirm(`确定要把这 ${sids.length} 首加入下载队列吗？`)) return;
+  const b = document.getElementById('cs-download');
+  setBusy(b, true);
+  const r = await jsonReq('/api/cloud/download', 'POST', {sids});
+  setBusy(b, false);
+  if (!r.ok) { toast(r.data.error || '无法开始下载', 'err'); return; }
+  const parts = [];
+  if (r.data.skipped) parts.push(`${r.data.skipped} 首本地已有`);
+  if (r.data.unmatched) parts.push(`${r.data.unmatched} 首未匹配已跳过`);
+  const extra = parts.length ? `（${parts.join('、')}）` : '';
+  toast(r.data.queued ? `已加入下载队列 ${r.data.queued} 首${extra}`
+                      : `没有可下载的${extra || '（本地都已经有了）'}`, 'ok');
+  if (r.data.queued) pollQueue();
+};
+document.getElementById('cs-addpl').onclick = () => {
+  if (!CSEL.size) { toast('先勾选要加入歌单的云盘歌曲', 'err'); return; }
+  addToPlaylists([...CSEL]);
+};
 
 /** 后端正在重新索引（打开页面时触发的）→ 好了就自动刷**一次**，然后停。
     以前这里是「不刷新就再刷列表」，结果变成每 5 秒刷一圈死循环，
