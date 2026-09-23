@@ -230,6 +230,8 @@ async def resolve_stream(cfg: Dict[str, Any], tr: Track, ncm: Ncm,
             "md5": "", "size": 0, "type": "",
             "source": str(got.get("source") or "第三方音源"),
             "source_id": str(got.get("source_id") or ""), "third_party": True,
+            # 记录平台：直链失效时要靠它把整个平台一起换掉
+            "platform": str(got.get("platform") or ""),
         }
     return {}
 
@@ -294,24 +296,56 @@ async def download_track(cfg: Dict[str, Any], tr: Track, task: Any = None) -> Di
                 task.progress(done, total)
 
         tried: set = set()
-        for attempt in (1, 2, 3):
+        skip_plats: set = set()
+        cur_plat = ""
+        plat_tries = 0
+        # 最多 8 次：**先在同一平台内换音源，换不动就把整个平台也跳掉**。
+        # 实测存在这种曲目：网易云官方无资源、各音源的 wy 通道全 404，
+        # 但同一首歌在酷狗/酷我上是有的 —— 只换音源永远跳不出 wy。
+        for attempt in range(1, 9):
             try:
                 tmp, md5hex, size = await download(entry["url"], TMP_DIR, meta["title"],
                                                    progress=on_bytes, control=task)
+                # 有的音源给的「直链」其实是个 JSON 中转页（实测「全豆要」@kg 就是）。
+                # 它会被当成文件下下来，把重试链直接截断 —— 所以在这里就先认出非音频。
+                if entry.get("third_party"):
+                    if not sniff_ext(tmp):
+                        tmp.unlink(missing_ok=True)
+                        raise DownloadError("返回的不是音频文件")
+                    if looks_like_preview(tmp, float(tr.duration or 0)):
+                        tmp.unlink(missing_ok=True)
+                        raise DownloadError("只返回了试听片段")
                 break
             except Canceled:
                 raise
             except DownloadError as e:
                 code = str(e)
-                # 第三方音源给的直链可能已经失效（403/404/410），换个音源再试一次
-                if entry.get("third_party") and attempt < 3:
-                    tried.add(entry.get("source_id") or "")
-                    nxt = await lxsource.resolve_url(cfg, tr, exclude=tried)
+                if entry.get("third_party") and attempt < 8:
+                    pl = str(entry.get("platform") or "")
+                    if pl != cur_plat:
+                        cur_plat = pl
+                        plat_tries = 0
+                    plat_tries += 1
+                    if plat_tries >= 2:
+                        # 这个平台内已经换过音源了还是不行 → 整个平台跳过，
+                        # 并**清空已排除音源**：某音源在此平台给坏链，不代表
+                        # 它在别的平台上也不行（实测「全豆要」wy 404 但 kg 可用）。
+                        skip_plats.add(pl)
+                        tried = set()
+                        plat_tries = 0
+                    else:
+                        tried.add(entry.get("source_id") or "")
+                    try:
+                        nxt = await lxsource.resolve_url(
+                            cfg, tr, exclude=tried, skip_platforms=skip_plats)
+                    except lxsource.LxUnavailable:
+                        nxt = None       # 沙箱不可用：本轮没法换，走下面的失败分支
                     if nxt:
                         entry.update({
                             "url": nxt["url"], "level": str(nxt.get("quality") or ""),
                             "source": str(nxt.get("source") or "第三方音源"),
                             "source_id": str(nxt.get("source_id") or ""),
+                            "platform": str(nxt.get("platform") or ""),
                             "md5": "", "size": 0, "type": "", "third_party": True,
                         })
                         if task is not None:

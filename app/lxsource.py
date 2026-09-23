@@ -336,7 +336,8 @@ def build_music_info(track: Any) -> Dict[str, Any]:
 async def resolve_url(cfg: Dict[str, Any], track: Any,
                       only_id: Optional[str] = None,
                       exclude: Optional[set] = None,
-                      allow_fallback: Optional[bool] = None) -> Optional[Dict[str, Any]]:
+                      allow_fallback: Optional[bool] = None,
+                      skip_platforms: Optional[set] = None) -> Optional[Dict[str, Any]]:
     """按启用顺序尝试第三方音源取链，返回 {url, source, quality, source_id, platform}
 
     分两阶段（思路参照 SPlayer-Next 的音源回退链）：
@@ -354,6 +355,8 @@ async def resolve_url(cfg: Dict[str, Any], track: Any,
     only_id 指定时只尝试该音源（用户在歌曲右侧手动指定音源的情况）。
     exclude 里的音源 id 会被跳过（上一个音源给的直链失效时换下一个）。
     allow_fallback=None 时读配置 limits.source_fallback（默认开）。
+    skip_platforms 里的平台整体跳过 —— 用于「wy 通道给的直链已失效（404）」时
+    直接换平台，而不是在同一个平台上换个音源继续碰运气。
     """
     sources = enabled_sources(cfg)
     if only_id:
@@ -365,12 +368,15 @@ async def resolve_url(cfg: Dict[str, Any], track: Any,
         return None
     if allow_fallback is None:
         allow_fallback = bool((cfg.get("limits") or {}).get("source_fallback", True))
+    skip_plats = {str(x) for x in (skip_platforms or set()) if x}
     info = build_music_info(track)
 
     # ---------- 阶段 1：网易云原生 id（先把所有音源跑完，快） ----------
     tried = 0
     hard_err = 0          # 因「连不上沙箱」而失败的音源数
     for src in sources:
+        if LX_PLATFORM in skip_plats:
+            break          # 整个网易云通道被跳过（调用方已知它的直链失效）
         platforms = src.get("platforms") or []
         if platforms and LX_PLATFORM not in platforms:
             continue
@@ -410,6 +416,8 @@ async def resolve_url(cfg: Dict[str, Any], track: Any,
         return None
     search_cache: Dict[str, List[Dict[str, Any]]] = {}
     for plat in LX_FALLBACK_PLATFORMS:
+        if plat in skip_plats:
+            continue
         cands: Optional[List[Dict[str, Any]]] = None
         hit: Optional[Dict[str, Any]] = None
         for src in sources:
