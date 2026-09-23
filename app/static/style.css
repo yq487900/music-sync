@@ -169,6 +169,7 @@ h2 { font-size: 16px; margin: 0 0 4px; font-weight: 620; }
 .btn {
   display: inline-flex; align-items: center; justify-content: center; gap: 8px;
   padding: 11px 20px;
+  text-decoration: none;   /* <a class="btn"> 不再带浏览器默认下划线 */
   font-size: 14px; font-weight: 560;
   font-family: inherit;
   color: var(--text);
@@ -191,6 +192,16 @@ h2 { font-size: 16px; margin: 0 0 4px; font-weight: 620; }
 .btn.primary:hover { box-shadow: 0 12px 32px rgba(123,140,255,.5); }
 .btn[disabled] { opacity: .55; cursor: not-allowed; transform: none; }
 .btn-row { display: flex; gap: 12px; flex-wrap: wrap; margin-top: 4px; }
+/* 主操作（紫）推到行尾：一行里「灰 = 次要、紫 = 主要」，不再紫灰交替显得零乱 */
+.btn-row .push { margin-left: auto; }
+/* 次级小按钮：批量并排时尺寸一致（.btn.mini 只缩了图标、高度仍与主按钮相同，易显得参差） */
+.btn.sm { padding: 9px 15px; font-size: 13px; border-radius: 12px; gap: 7px; }
+.btn.sm svg { width: 14px; height: 14px; flex-basis: 14px; }
+/* 列表工具条：排序在左、批量勾选在右，同一行 */
+.toolrow { display: flex; flex-wrap: wrap; gap: 9px; align-items: center; margin: 12px 0 4px; }
+.toolrow .lbl { font-size: 12px; color: var(--text-dim); }
+.toolrow .tb-push { flex: 1 1 auto; }
+.toolrow .tb-sep { width: 1px; height: 18px; background: var(--glass-border); margin: 0 3px; }
 
 /* ---------- 表单 ---------- */
 .field { margin-bottom: 18px; }
@@ -581,7 +592,10 @@ textarea:focus {
   .hero .cover { width: 84px; height: 84px; flex-basis: 84px; }
   h1 { font-size: 20px; }
   .btn-row { gap: 9px; }
+  .toolrow { gap: 7px; }
+  .toolrow .tb-push { display: none; }   /* 窄屏不再左右分区，按钮自然左对齐换行 */
   .btn { padding: 10px 15px; font-size: 13.5px; }
+  .btn.sm { padding: 8px 12px; font-size: 12.5px; }
   /* 极窄屏：信息行字号略收 + 收起文件大小，保证「歌手·专辑·时长·音质·音源」完整显示在一行 */
   .trk .meta > span { font-size: 11px; }
   .trk .meta .sz { display: none; }
