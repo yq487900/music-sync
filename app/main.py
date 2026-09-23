@@ -9,6 +9,8 @@ import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+from sqlalchemy import text
+
 import app.cloud as cloud
 import app.cloud_index as cloud_index
 import app.config as config
@@ -74,8 +76,28 @@ def _slice(items: list, page: int, size: int) -> dict:
             "page": page, "pages": pages, "size": size}
 
 
+def _ensure_indexes() -> None:
+    """启动时确保常用查询列有索引。
+
+    tracks.platform_track_id 是热点查询列（歌单页一次要按它查 2000+ 个值，
+    下载/整理路径也用它定位曲目），而这张表原本一个索引都没有 —— 每次都是全表扫描。
+    SQLite 建索引幂等且是毫秒级，放启动时兜底：即使换了新库（create_all 不会
+    给已存在的表补索引）也能自动带上。
+    """
+    try:
+        db = SessionLocal()
+        try:
+            db.execute(text("CREATE INDEX IF NOT EXISTS ix_tracks_ptid ON tracks(platform_track_id)"))
+            db.commit()
+        finally:
+            db.close()
+    except Exception as e:  # noqa: BLE001
+        print(f"[startup] 建立索引跳过：{e}", flush=True)
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    _ensure_indexes()
     start_scheduler()
     yield
     from app.scheduler import scheduler
@@ -160,54 +182,106 @@ async def _account_playlists(cfg: dict) -> dict:
         await ncm.close()
 
 
+# 歌单批量拉详情的并发度。实测（2098 首全量）：
+#   并发 8 / 分块 300 -> 1.46s；并发 12 -> 0.97s；并发 16 -> 0.89s。
+# 取 12：收益已经到位，同时给网易云留出余量（再高收益递减、风控风险上升）。
+_PL_CONCURRENCY = 12
+
+
+def _song_to_row(s: dict) -> dict:
+    """网易云 song 对象 → 面板用的曲目行。
+
+    `/song/detail` 的 songs[] 与 `/playlist/detail` 里内嵌的 tracks[] 是**同一种结构**，
+    所以两处可以共用一个转换函数。字段不完整时返回 {}。
+    """
+    try:
+        sid = int(s["id"])
+    except (KeyError, TypeError, ValueError):
+        return {}
+    ar = [a.get("name") for a in (s.get("ar") or s.get("artists") or []) if a.get("name")]
+    al = s.get("al") or s.get("album") or {}
+    return {
+        "sid": sid,
+        "title": str(s.get("name") or sid),
+        "artist": " / ".join(ar) or "未知歌手",
+        "album": str(al.get("name") or ""),
+        "cover": str(al.get("picUrl") or ""),
+        "duration": int((s.get("dt") or 0) // 1000),
+    }
+
+
+def _song_cache_get(sid) -> Optional[dict]:
+    """读歌曲详情缓存（超 TTL 视为没有）。返回副本，调用方随意改动。"""
+    hit = _SONG_CACHE.get(str(sid))
+    if hit and time.time() - hit[0] < _TTL_SONG_DETAIL:
+        return dict(hit[1])
+    return None
+
+
+def _song_cache_put(row: dict) -> None:
+    """写歌曲详情缓存。超过上限时先清过期项，仍超再丢最早的，避免长期运行内存无界增长。"""
+    if not row:
+        return
+    if len(_SONG_CACHE) > 20000:
+        now = time.time()
+        for k in [k for k, v in list(_SONG_CACHE.items()) if now - v[0] > _TTL_SONG_DETAIL]:
+            _SONG_CACHE.pop(k, None)
+        if len(_SONG_CACHE) > 20000:
+            for k in sorted(_SONG_CACHE, key=lambda x: _SONG_CACHE[x][0])[:10000]:
+                _SONG_CACHE.pop(k, None)
+    _SONG_CACHE[str(row["sid"])] = (time.time(), row)
+
+
 async def _playlist_tracks(pid: int, cfg: dict) -> dict:
-    """歌单全部曲目（带封面），按歌单缓存"""
+    """歌单全部曲目（带封面）。歌单 id 列表短缓存；歌曲详情长缓存。
+
+    三次提速叠加（思路参考 SPlayer-Next 的 fetchPlaylist）：
+      ① 白拿：`/playlist/detail` 的响应里本来就带前 ~1000 首**完整 song**，
+         直接拿来用（零额外请求），而不是只取 trackIds 后对这 1000 首再请求一遍。
+      ② 长缓存：详情（标题/歌手/封面）几乎不变，缓存 1 小时；刷新时只有
+         新加入歌单的歌未命中 → 增量拉取。
+      ③ 动态分块并发：未命中的部分按并发数切分（批数 = 并发、每批最小）并行请求。
+    """
     key = f"tracks:{pid}"
     cached = _cache_get(key, _TTL_TRACKS)
     if cached is not None:
         return cached
-    # 批量详情查询：并发 8、无额外间隔（只读接口，风险低；单曲接口仍用默认的 0.35s 串行）。
-    # 2095 首 → 21 批 ÷ 8 并发 ≈ 3 轮，实测从 8s 降到 2~3s。
-    ncm = Ncm(cookie=_cookie(cfg), delay=0.0, concurrency=8)
+    ncm = Ncm(cookie=_cookie(cfg), delay=0.0, concurrency=_PL_CONCURRENCY)
     try:
         pl = await ncm.playlist_detail(pid)
         if not pl:
             raise NcmError("歌单不存在或不可见")
         name = str(pl.get("name") or pid)
         cover = str(pl.get("coverImgUrl") or "")
+
+        # ① 白拿 detail 内嵌的完整曲目（约前 1000 首），同时回填长缓存
+        for s in (pl.get("tracks") or []):
+            _song_cache_put(_song_to_row(s))
+
         ids = await ncm.playlist_track_ids(pid, pl)
-        # 歌曲详情长缓存：标题/歌手/封面几乎不变，缓存 1 小时；
-        # 刷新时只有「新加入歌单」的歌才需要拉详情，其余命中缓存 → 秒开
+
+        # ② 命中缓存（含上一步刚回填的）直接用，未命中的才需要请求
         rows = []
-        _missing = []
+        missing = []
         for sid in ids:
-            dk = str(sid)
-            hit = _SONG_CACHE.get(dk)
-            if hit and time.time() - hit[0] < _TTL_SONG_DETAIL:
-                rows.append(dict(hit[1]))
+            hit = _song_cache_get(sid)
+            if hit is not None:
+                rows.append(hit)
             else:
-                _missing.append(sid)
-        if _missing:
-            _chunks = [_missing[i:i + 300] for i in range(0, len(_missing), 300)]
-            _batches = await asyncio.gather(*[ncm.song_detail(c) for c in _chunks]) if _chunks else []
+                missing.append(sid)
+
+        # ③ 只补缺的部分：动态分块，批数 = 并发数（每批尽量小 → 单批越快）
+        if missing:
+            chunk = max(1, -(-len(missing) // _PL_CONCURRENCY))
+            _chunks = [missing[i:i + chunk] for i in range(0, len(missing), chunk)]
+            _batches = await asyncio.gather(*[ncm.song_detail(c) for c in _chunks])
             for _b in _batches:
                 for s in _b:
-                    try:
-                        sid = int(s["id"])
-                    except (KeyError, TypeError, ValueError):
+                    row = _song_to_row(s)
+                    if not row:
                         continue
-                    ar = [a.get("name") for a in (s.get("ar") or s.get("artists") or []) if a.get("name")]
-                    al = s.get("al") or s.get("album") or {}
-                    one = {
-                        "sid": sid,
-                        "title": str(s.get("name") or sid),
-                        "artist": " / ".join(ar) or "未知歌手",
-                        "album": str(al.get("name") or ""),
-                        "cover": str(al.get("picUrl") or ""),
-                        "duration": int((s.get("dt") or 0) // 1000),
-                    }
-                    _SONG_CACHE[str(sid)] = (time.time(), one)
-                    rows.append(one)
+                    _song_cache_put(row)
+                    rows.append(row)
         order = {sid: i for i, sid in enumerate(ids)}
         rows.sort(key=lambda r: order.get(r["sid"], 10 ** 9))
         data = {"id": pid, "name": name, "cover": cover, "tracks": rows}
