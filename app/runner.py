@@ -298,6 +298,11 @@ async def _organize_runner(task: Task, cfg: Dict[str, Any]) -> None:
     task.artist = str(m.get("artist") or task.artist)
     marks = [k for k, v in (("封面", res.get("cover")), ("歌词", res.get("lyrics"))) if v]
     task.done_with(source="、".join(marks) or "仅标签")
+    if getattr(task, "to_upload", False):
+        try:
+            enqueue_upload(task.track_id)
+        except LookupError:
+            pass
 
 
 ORGANIZE = Queue("organize", _organize_runner, config.load, concurrency=1)
@@ -331,6 +336,22 @@ def enqueue_backfill(cfg: Dict[str, Any], limit: int = 0,
         if ORGANIZE.add(t) is t:
             added += 1
     return {"added": added, "candidates": len(todo), "total": len(files)}
+
+
+def enqueue_organize_track(track_id: int, to_upload: bool = False) -> Task:
+    """按曲目触发整理（刮削标签/封面/歌词）；to_upload=True 时整理完成后自动上传云盘"""
+    db = SessionLocal()
+    try:
+        tr = db.query(Track).filter_by(id=int(track_id)).first()
+        if tr is None or not tr.file_path:
+            raise LookupError("曲目不存在或没有本地文件")
+        t = Task("organize", tr.id, title=tr.title or "", artist=tr.artist or "",
+                 album=tr.album or "")
+        t.path = tr.file_path
+        t.to_upload = bool(to_upload)
+        return ORGANIZE.add(t)
+    finally:
+        db.close()
 
 
 # ---------------------------------------------------------------- 歌单监控
@@ -373,8 +394,8 @@ async def monitor_playlists(dry: bool = False,
     ci_index.ensure_async(cookie)
     ci = ci_index
 
-    plan_down: List[str] = []          # 要下载的歌曲 id
-    plan_up: List[int] = []            # 要上传的曲目 id（本地有、云盘没有）
+    plan_down: List[str] = []          # 要下载的歌曲 id（云盘/本地都没有）
+    plan_up: List[int] = []            # 本地有、云盘没有 → 整理后上传
     scanned = 0
     db = SessionLocal()
     try:
@@ -386,14 +407,12 @@ async def monitor_playlists(dry: bool = False,
             in_cloud = ci.lookup(sid, (tr.title if tr is not None else ""),
                                  (tr.artist if tr is not None else ""),
                                  (tr.cloud_sid if tr is not None else "") or "")
+            if in_cloud is True:
+                continue               # 云盘已有 → 不下载、不上传
             if local:
-                # 本地已有：full 模式下还要看云盘缺不缺（缺就排队上传补齐）
-                if mode == "full" and in_cloud is not True:
-                    plan_up.append(tr.id)
+                plan_up.append(tr.id)  # 本地已有 → 整理 + 上传云盘（不重复下载）
                 continue
-            if mode == "full" and in_cloud is True:
-                continue               # full 模式的目标是补齐云盘，云盘已有就不用下
-            plan_down.append(sid)
+            plan_down.append(sid)      # 云盘/本地都没有 → 下载
         # ③ 每轮上限：下载优先，剩下的下一轮继续
         left_down = max(0, len(plan_down) - batch)
         plan_down = plan_down[:batch]
@@ -451,7 +470,7 @@ async def monitor_playlists(dry: bool = False,
             except LookupError:
                 continue
         for tid in plan_up:
-            enqueue_upload(tid)
+            enqueue_organize_track(tid, to_upload=True)
             queued_u += 1
     finally:
         db.close()
