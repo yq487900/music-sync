@@ -1607,13 +1607,24 @@ async def api_update_source(sid: str):
 
 
 @app.post("/api/monitor/run")
-async def api_monitor_run():
-    """手动跑一次歌单监控（配置页「立即检查一次」）。
-    先强制刷一次歌单索引，否则刚加进歌单的歌手上的内存索引里还没有。"""
+async def api_monitor_run(request: Request):
+    """手动跑一次歌单监控（配置页「立即检查一次」；也可给手机自动化 / 外网调用）。
+
+    密钥（可选）：配置页填了「触发密钥」后，必须带上
+    —— 请求头 `X-Token: <密钥>` 或查询参数 `?token=<密钥>`；
+    不填就不校验（局域网内直接可用）。
+    先强制刷一次歌单索引，否则刚加进歌单的歌手在内存索引里还没有。
+    """
     from app.runner import monitor_playlists
     from app.scheduler import refresh_playlist_index
     cfg = config.load()
-    if not bool((cfg.get("monitor") or {}).get("on")):
+    mon = cfg.get("monitor") or {}
+    want = str(mon.get("token") or "").strip()
+    if want:
+        given = (request.headers.get("X-Token") or request.query_params.get("token") or "").strip()
+        if given != want:
+            return JSONResponse({"error": "触发密钥不对"}, status_code=403)
+    if not bool(mon.get("on")):
         return JSONResponse({"error": "「歌单监控」开关是关的，先在配置页打开"}, status_code=400)
     try:
         await refresh_playlist_index()

@@ -123,6 +123,21 @@
         <button type="button" class="btn sm" id="btn-monitor-run"><svg><use href="#ic-refresh"/></svg>立即检查一次</button>
         <span class="hint" id="monitor-run-hint" style="align-self:center"></span>
       </div>
+      <div class="field" style="margin-top:18px">
+        <label for="monitor_token">触发密钥（可选）</label>
+        <input type="text" id="monitor_token" name="monitor_token"
+               value="{{ cfg.monitor.token or '' }}" placeholder="留空 = 不校验（只在局域网用时可以留空）">
+        <span class="hint">
+          填上后，调用「立即检查」接口必须带这个密钥（请求头 <span class="mono">X-Token</span>
+          或地址后接 <span class="mono">?token=...</span>）。<br>
+          要给手机自动化 / 内网穿透暴露时，建议填一个。调用地址示例：<br>
+          <span class="mono">http://你的NAS地址:13570/api/monitor/run?token=你的密钥</span>
+        </span>
+        <div class="btn-row" style="margin-top:10px">
+          <button type="button" class="btn sm" id="btn-gen-token">生成随机密钥</button>
+          <button type="button" class="btn sm" id="btn-copy-run">复制调用命令</button>
+        </div>
+      </div>
     </div>
 
     <div class="field">
@@ -319,6 +334,7 @@ function readCfgForm(f) {
     monitor_mode: f.monitor_mode.value,
     monitor_batch: num('monitor_batch', 20),
     monitor_interval: num('monitor_interval', 2),
+    monitor_token: (f.monitor_token ? f.monitor_token.value.trim() : ''),
     sync_time: f.sync_time.value
   };
 }
@@ -432,6 +448,20 @@ document.getElementById('btn-src-check-all').onclick = (e) => srcBatch('check-al
 document.getElementById('btn-src-update-all').onclick = (e) => srcBatch('update-all', e.currentTarget);
 
 /** 「立即检查一次」：先刷歌单索引，再跑一轮监控（不等待下一次定时） */
+document.getElementById('btn-gen-token').onclick = () => {
+  const box = document.getElementById('monitor_token');
+  box.value = crypto.randomUUID ? crypto.randomUUID().replace(/-/g, '') : String(Date.now()) + Math.random().toString(36).slice(2);
+  toast('已生成，记得点「保存配置」才会生效', 'ok');
+};
+document.getElementById('btn-copy-run').onclick = () => {
+  const tk = (document.getElementById('monitor_token').value || '').trim();
+  const url = location.origin + '/api/monitor/run' + (tk ? '?token=' + tk : '');
+  const cmd = `curl -X POST "${url}"`;
+  (navigator.clipboard ? navigator.clipboard.writeText(cmd) : Promise.reject())
+    .then(() => toast('已复制：' + cmd, 'ok'))
+    .catch(() => toast(cmd, 'ok'));
+};
+
 document.getElementById('btn-monitor-run').onclick = async (e) => {
   const btn = e.currentTarget;
   const hint = document.getElementById('monitor-run-hint');
