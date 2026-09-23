@@ -38,7 +38,9 @@
   <div class="filterbar">
     <span class="lbl">排序</span>
     <select id="sort-sel" class="src-sel" style="max-width:none" title="排序方式">
-      <option value=":asc">默认顺序</option>
+      <option value=":asc">歌单原顺序</option>
+      <option value="time:asc">加入时间 早→晚</option>
+      <option value="time:desc">加入时间 晚→早</option>
       <option value="title:asc">歌名 A→Z</option>
       <option value="title:desc">歌名 Z→A</option>
       <option value="artist:asc">歌手 A→Z</option>
@@ -131,11 +133,13 @@ function rowHtml(t, i) {
   </div>`;
 }
 
-/** 库列表排序：osort=""=原序；title=歌名；artist=歌手 */
+/** 库列表排序：osort=""=原序；time=文件时间；title=歌名；artist=歌手（均为本页内排序） */
 function applySort() {
   const k = ST.osort, o = ST.oorder;
   if (!k) { items = itemsRaw.slice(); return; }
-  const val = (x) => String((k === 'title' ? (x.title || x.name) : x.artist) || '').toLowerCase();
+  const val = k === 'time'
+    ? (x) => Number(x.mtime || 0)
+    : (x) => String((k === 'title' ? (x.title || x.name) : x.artist) || '').toLowerCase();
   items = itemsRaw.slice().sort((a, b) => {
     const av = val(a), bv = val(b);
     const r = av < bv ? -1 : (av > bv ? 1 : 0);
