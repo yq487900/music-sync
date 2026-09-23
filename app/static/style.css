@@ -476,6 +476,22 @@ label.switch .lbl em { display: block; font-style: normal; font-size: 12px; colo
 /* ---------- 音源行 ---------- */
 .src { display: block; padding: 12px 14px; margin-bottom: 10px;
   border: 1px solid var(--glass-border); border-radius: var(--radius-sm); background: rgba(255,255,255,.05); }
+/* 整行颜色 = 可用性：绿框=可用、红框=不可用、紫框=正在检测（扫一眼就知道哪个有问题） */
+.src.ok { border-color: rgba(74, 222, 128, .5); background: rgba(74, 222, 128, .06); }
+.src.bad { border-color: rgba(248, 113, 113, .5); background: rgba(248, 113, 113, .06); }
+.src.busy { border-color: rgba(123, 140, 255, .55); background: rgba(123, 140, 255, .08); }
+/* 名称后面的可用性徒标 */
+.pill.s-ok { background: rgba(74, 222, 128, .18); border-color: rgba(74, 222, 128, .45); color: #86efac; }
+.pill.s-ok .dot-i { background: var(--ok); box-shadow: 0 0 9px var(--ok); }
+.pill.s-bad { background: rgba(248, 113, 113, .18); border-color: rgba(248, 113, 113, .45); color: #fca5a5; }
+.pill.s-bad .dot-i { background: var(--err); box-shadow: 0 0 9px var(--err); }
+.pill.s-wait { background: rgba(255, 255, 255, .08); border-color: var(--glass-border); color: var(--text-dim); }
+.pill.s-wait .dot-i { background: var(--text-dim); box-shadow: none; }
+.src .info strong .placeholder-never { display: none; }
+.src .info strong .pill { margin-left: 6px; vertical-align: middle; font-size: 11px; padding: 2px 9px; }
+/* 失败原因：单独一行、红色、允许换行（覆盖 .info span 的单行省略号） */
+.src .info .src-err { display: block; font-size: 12px; color: #fca5a5; margin-top: 3px;
+  white-space: normal; overflow: visible; text-overflow: clip; }
 .src-head { display: flex; align-items: center; gap: 12px; }
 .src .info { min-width: 0; flex: 1; }
 .src .info strong { display: block; font-size: 14px; font-weight: 560; }

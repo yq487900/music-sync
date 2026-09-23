@@ -379,20 +379,49 @@ document.getElementById('file-cfg').onchange = async (e) => {
 };
 
 /* ---------------- 音源管理 ---------------- */
+/** 可用性徒标：绿=可用 / 红=不可用 / 灰=无脚本（一眼能看出哪个有问题） */
+function srcBadge(s) {
+  if (!s.has_script) return '<span class="pill s-wait s-badge"><span class="dot-i"></span>无脚本</span>';
+  return s.ok
+    ? '<span class="pill s-ok s-badge"><span class="dot-i"></span>可用</span>'
+    : '<span class="pill s-bad s-badge"><span class="dot-i"></span>不可用</span>';
+}
+/** 只刷新一行的状态（逐个检测时用，不重绑事件） */
+function paintSrcRow(el, s) {
+  if (!el) return;
+  el.classList.remove('busy', 'ok', 'bad');
+  if (s.has_script) el.classList.add(s.ok ? 'ok' : 'bad');
+  const b = el.querySelector('.s-badge');
+  if (b) b.outerHTML = srcBadge(s);
+  const err = el.querySelector('.src-err');
+  if (err) {
+    const msg = (s.has_script && !s.ok && s.note) ? String(s.note) : '';
+    err.textContent = msg;
+    err.hidden = !msg;
+  }
+  const meta = el.querySelector('.src-meta');
+  if (meta) {
+    const plat = (s.platforms || []).join('/') || '—';
+    const qual = (s.qualities || []).join('/') || '—';
+    meta.textContent = `平台 ${plat} · 音质 ${qual}` + (s.checked_at ? ' · 检测于 ' + s.checked_at : ' · 还没检测过');
+  }
+}
 function srcRow(s) {
-  const state = !s.has_script ? '无脚本' : (s.ok ? '可用' : '不可用');
   const plat = (s.platforms || []).join('/') || '—';
   const qual = (s.qualities || []).join('/') || '—';
+  const errMsg = (s.has_script && !s.ok && s.note) ? String(s.note) : '';
+  const cls = 'src' + (s.has_script ? (s.ok ? ' ok' : ' bad') : '');
   return `
-    <div class="src" data-id="${esc(s.id)}">
+    <div class="${cls}" data-id="${esc(s.id)}">
       <div class="src-head">
         <label class="switch" style="margin:0;padding:8px 10px;flex:0 0 auto" title="启用 / 停用">
           <input type="checkbox" ${s.enabled ? 'checked' : ''} class="en">
           <span class="track"></span>
         </label>
         <span class="info">
-          <strong>${esc(s.name)}${s.version ? ` <span class="hint mono">v${esc(s.version)}</span>` : ''}</strong>
-          <span>${state}${s.note && !s.ok ? '：' + esc(s.note) : ''} · 平台 ${esc(plat)} · 音质 ${esc(qual)}${s.checked_at ? ' · ' + esc(s.checked_at) : ''}</span>
+          <strong>${esc(s.name)}${srcBadge(s)}${s.version ? ` <span class="hint mono">v${esc(s.version)}</span>` : ''}</strong>
+          <span class="src-meta">平台 ${esc(plat)} · 音质 ${esc(qual)}${s.checked_at ? ' · 检测于 ' + esc(s.checked_at) : ' · 还没检测过'}</span>
+          <span class="src-err"${errMsg ? '' : ' hidden'}>${esc(errMsg)}</span>
         </span>
         <span class="acts">
           <button class="btn mini" data-act="check">检测</button>
@@ -426,22 +455,39 @@ function srcEditForm(e) {
     </div>`;
 }
 
-/** 「全部检测」/「全部更新」：后端顺序挨个跑，可能要几十秒，所以超时给足 */
+/** 「全部检测」/「全部更新」：逐个调用单行接口 —— 每跑完一个就把那一行的状态刷出来，
+    不用等全部跑完（8 个音源逐个跑确实慢，实时反馈才不会让人以为卡死）。 */
 async function srcBatch(kind, btn) {
   const hint = document.getElementById('src-all-hint');
+  const isCheck = kind === 'check-all';
+  const r0 = await jsonReq('/api/sources');
+  if (!r0.ok) { toast('读取音源列表失败', 'err'); return; }
+  const items = (r0.data.sources || []).filter(x => isCheck ? x.has_script : x.url);
+  if (!items.length) {
+    toast(isCheck ? '没有可检测的音源（都没有脚本）' : '没有记录了链接的音源，无法更新', 'err');
+    return;
+  }
   setBusy(btn, true);
-  if (hint) hint.textContent = kind === 'check-all' ? '正在逐个检测…' : '正在逐个更新…';
-  const r = await jsonReq('/api/sources/' + kind, 'POST', {}, 600000);
+  let ok = 0, bad = 0;
+  for (let i = 0; i < items.length; i++) {
+    const s = items[i];
+    const el = document.querySelector('.src[data-id="' + String(s.id).replace(/"/g, '') + '"]');
+    if (hint) hint.textContent = `${isCheck ? '检测' : '更新'}中 ${i + 1}/${items.length}：${s.name}`;
+    if (el) { el.classList.remove('ok', 'bad'); el.classList.add('busy'); }
+    const r1 = await jsonReq('/api/sources/' + encodeURIComponent(s.id)
+                            + (isCheck ? '/check' : '/update'), 'POST', {}, 120000);
+    if (r1.ok && r1.data.source) {
+      const ns = r1.data.source;
+      if (ns.ok) ok++; else bad++;
+      paintSrcRow(el, ns);
+    } else {
+      bad++;
+      paintSrcRow(el, {has_script: s.has_script, ok: false, note: r1.data.error || '调用失败'});
+    }
+  }
   setBusy(btn, false);
   if (hint) hint.textContent = '';
-  if (!r.ok) { toast(r.data.error || '操作失败', 'err'); return; }
-  const d = r.data;
-  const bad = (d.failed || []).length;
-  const head = kind === 'check-all'
-    ? `检测完成：${d.ok}/${d.total} 个可用`
-    : `更新完成：${d.updated} 个` + (d.skipped ? `（${d.skipped} 个没链接、已跳过）` : '');
-  const more = bad ? `，${bad} 个失败：${d.failed[0].name}——${d.failed[0].msg}` : '';
-  toast(head + more, bad ? 'err' : 'ok');
+  toast(`${isCheck ? '检测' : '更新'}完成：${ok} 个可用 / ${bad} 个异常`, bad ? 'err' : 'ok');
   loadSources();
 }
 document.getElementById('btn-src-check-all').onclick = (e) => srcBatch('check-all', e.currentTarget);
@@ -482,8 +528,11 @@ async function loadSources() {
   const st = document.getElementById('src-state');
   if (!r.ok) { list.innerHTML = '<div class="empty">加载失败</div>'; return; }
   st.className = 'pill' + (r.data.runner ? '' : ' warn');
-  st.innerHTML = '<span class="dot-i"></span>' + (r.data.runner ? '沙箱正常' : '沙箱异常');
   const items = r.data.sources || [];
+  const okN = items.filter(x => x.ok).length;
+  const badN = items.filter(x => x.has_script && !x.ok).length;
+  st.innerHTML = '<span class="dot-i"></span>' + (r.data.runner ? '沙箱正常' : '沙箱异常')
+    + (items.length ? ` · ${okN} 个可用 / ${badN} 个异常` : '');
   if (!items.length) {
     list.innerHTML = '<div class="empty"><div class="big">🧩</div>还没有音源' +
       '<br><span class="hint">展开下方「添加音源」导入一个洛雪兼容脚本</span></div>';
