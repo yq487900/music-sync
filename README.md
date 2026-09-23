@@ -40,7 +40,7 @@ docker compose up -d
 docker compose -f docker-compose.ghcr.yml up -d
 ```
 
-镜像地址：`ghcr.io/yq487900/music-sync:latest`（打 tag 会自动构建并发布同名版本镜像）
+镜像地址：`ghcr.io/yq487900/music-sync:latest`（打 tag 会自动构建并发布对应版本镜像；版本镜像 tag 不带 v 前缀，如 v0.1.0 → 0.1.0）
 
 > 构建期默认使用国内镜像源（清华 PyPI / npmmirror）。
 > 如在海外构建：`docker compose build --build-arg PIP_INDEX=https://pypi.org/simple --build-arg NPM_REGISTRY=https://registry.npmjs.org`
@@ -172,7 +172,7 @@ B=http://127.0.0.1:13570 bash tests/queue_api_test.sh    # 队列 / 音源 / 单
 
 ## 版本与发布
 
-- 镜像：`ghcr.io/yq487900/music-sync`（`latest` = 主分支最新；打 `v*` tag 会构建对应版本号镜像）
+- 镜像：`ghcr.io/yq487900/music-sync`（`latest` = 主分支最新；打 `v*` tag 会构建对应版本号镜像，版本 tag 不带 v 前缀，如 v0.1.0 → 0.1.0）
 - 发布：推 tag（如 `v0.0.1`）后 GitHub Actions 自动构建镜像并创建同名 Release
 - 组件清单与致谢见 [NOTICE](NOTICE)
 
