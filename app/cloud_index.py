@@ -140,23 +140,32 @@ class CloudIndex:
     async def _fetch(self, cookie: str) -> List[Dict[str, Any]]:
         from app import cloud as cloudmod          # 延迟导入：便于脱离 aiohttp 单测本模块
 
-        items: List[Dict[str, Any]] = []
-        offset, total = 0, None
-        page = 1000            # 实测 limit=1000 一次性返回没问题：3939 首只要 4 个请求（原来 40 个）
-        while True:
-            data = await cloudmod.list_songs(cookie, limit=page, offset=offset)
-            batch = data.get("data") or []
-            if not batch and offset:              # 中途空了多半是被限流 → 等一下重试一次
-                await asyncio.sleep(1.2)
-                data = await cloudmod.list_songs(cookie, limit=page, offset=offset)
-                batch = data.get("data") or []
-            items.extend(cloudmod.simplify(it) for it in batch)
-            if total is None:
-                total = int(data.get("count") or 0)
-            offset += len(batch)
-            if not batch or offset >= (total or 0) or offset >= 20000:
-                break
-            await asyncio.sleep(0.2)               # 别把接口打太急
+        page = 1000            # 实测 limit=1000 一次性返回没问题：3939 首只要 4 个请求
+
+        async def one(offset: int) -> Dict[str, Any]:
+            """拉一页；空了重试一次（多半是被限流）"""
+            try:
+                d = await cloudmod.list_songs(cookie, limit=page, offset=offset)
+                if not (d.get("data") or []) and offset:
+                    await asyncio.sleep(1.2)
+                    d = await cloudmod.list_songs(cookie, limit=page, offset=offset)
+                return d
+            except Exception:  # noqa: BLE001
+                return {}
+
+        # 单页约 2.8s（几千条数据），原先逐页串行 4 页 ≈ 12s；
+        # 改为「先拉第一页拿总数，其余页并发」→ 常见情况约 3s
+        first = await one(0)
+        items = [cloudmod.simplify(it) for it in (first.get("data") or [])]
+        if not items:
+            return items
+        total = int(first.get("count") or 0)
+        want = min(max(total, len(items)), 20000)
+        offsets = list(range(len(items), want, page))
+        for i in range(0, len(offsets), 8):
+            wave = offsets[i:i + 8]
+            for d in await asyncio.gather(*[one(o) for o in wave]):
+                items.extend(cloudmod.simplify(it) for it in (d.get("data") or []))
         return items
 
     def _rebuild(self, items: List[Dict[str, Any]]) -> None:

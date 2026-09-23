@@ -211,10 +211,11 @@ async function load() {
 function renderQueue(q) {
   const box = document.getElementById('queue');
   const pill = document.getElementById('q-state');
-  pill.className = 'pill' + (q.busy ? '' : ' warn');
+  pill.className = 'pill' + (q.busy ? '' : (q.failed ? ' warn' : ''));
+  // 已完成的不留在列表里，pill 也就不再报累计完成数（否则“完成 1”与空列表矛盾）
   pill.innerHTML = '<span class="dot-i"></span>' +
     (q.busy ? `进行 ${q.downloading} · 排队 ${q.queued}${q.paused ? ' · 暂停 ' + q.paused : ''}`
-            : `空闲（完成 ${q.done} · 失败 ${q.failed}）`);
+            : (q.failed ? `空闲 · ${q.failed} 首失败待处理` : '空闲'));
   // 已完成 / 已取消 的任务不显示（自动清空），只保留失败的和正在跑的
   const tasks = (q.tasks || []).slice().reverse()
     .filter(t => !['done', 'canceled'].includes(t.state));
@@ -273,18 +274,19 @@ function renderQueue(q) {
   });
 }
 
-let qTimer = null;
+let qBusyLast = null;
 async function pollQueue() {
   const r = await jsonReq('/api/queue');
   if (!r.ok) return;
-  renderQueue(r.data.download);
-  if (r.data.download.busy) {
-    clearTimeout(qTimer);
-    qTimer = setTimeout(pollQueue, 1500);
-  } else if (r.data.download.done || r.data.download.failed) {
-    load();
-  }
+  const q = r.data.download;
+  renderQueue(q);
+  // 从「忙」变「空闲」的那一刻刷新曲目列表（下载完的歌状态/云盘状态变了）
+  if (qBusyLast === true && !q.busy) load();
+  qBusyLast = !!q.busy;
 }
+/* 常驻轮询（页面隐藏时自动跳过）：之前只在 busy 时自续，空闲后就停了，
+   导致“正在下载”卡片和曲目状态不能实时变化 */
+pollEvery(pollQueue, 2000);
 
 /* ---------- 筛选片 / 按钮 ---------- */
 bindChips('chips', ST, load);

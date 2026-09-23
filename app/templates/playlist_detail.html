@@ -298,7 +298,7 @@ document.getElementById('btn-fill').onclick = () => fillPlaylist(true);
 document.getElementById('btn-refresh').onclick = () => {
   NEED_REFRESH = 1;
   ciReloaded = false;
-  toast('正在刷新歌单曲目（含云盘索引，约几十秒）…', 'ok');
+  toast('正在刷新歌单…（曲目约 2 秒；云盘状态稍后自动补上）', 'ok');
   load(true);
 };
 

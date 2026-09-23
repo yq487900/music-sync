@@ -622,8 +622,9 @@ document.addEventListener('keydown', function (e) {
   } else if (e.key === '?') { e.preventDefault(); openLegend(); }
 });
 
-/* 任务中心：有任务才高频轮询，空闲时降到 30s */
-pollEvery(tcPoll, 20000);
+/* 任务中心轮询：2.5 秒。必须常驻且足够快 —— 否则新任务加入时，
+   按钮右上角的数字角标要等到用户点开面板才更新 */
+pollEvery(tcPoll, 2500);
 </script>
 {% block script %}{% endblock %}
 </body>
