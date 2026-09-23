@@ -614,7 +614,8 @@ textarea:focus {
   .toolrow { gap: 7px; }
   .btn { padding: 10px 15px; font-size: 13.5px; }
   .btn.sm { padding: 9px 12px; font-size: 13px; }
-  .searchbar { padding: 10px 13px; }
+  .searchbar { padding: 4px 5px 4px 12px; }
+  .searchbar input { padding: 7px 12px; }
   .toolrow .src-sel { padding: 9px 12px; font-size: 13px; }
   /* 极窄屏：信息行字号略收 + 收起文件大小，保证「歌手·专辑·时长·音质·音源」完整显示在一行 */
   .trk .meta > span { font-size: 11px; }
@@ -717,16 +718,27 @@ textarea:focus {
 /* 搜索框：全站统一尺寸（高约 40px，与 .btn.sm / 工具条下拉对齐），
    各页只允许 .filterbar 内自动撑宽，其余一律同一宽度上限 */
 .searchbar {
-  display: flex; align-items: center; gap: 10px;
-  width: 100%; max-width: 420px; margin: 14px 0 10px; padding: 11px 15px;
+  display: flex; align-items: center; gap: 9px;
+  width: 100%; max-width: 420px; margin: 14px 0 10px; padding: 5px 6px 5px 14px;
   border-radius: 14px; background: rgba(255, 255, 255, .06);
   border: 1px solid var(--glass-border); transition: .2s;
 }
 .searchbar:focus-within { border-color: rgba(123, 140, 255, .55); background: rgba(255, 255, 255, .09); }
 .searchbar svg { width: 16px; height: 16px; flex: 0 0 16px; fill: none; stroke: currentColor;
   stroke-width: 1.8; stroke-linecap: round; color: rgba(242, 245, 255, .5); }
-.searchbar input { flex: 1; min-width: 0; background: none; border: 0; padding: 0;
-  font-size: 14px; color: var(--text); outline: none; }
+/* 输入框本身：做成与外框同弧度的圆角矩形，并加大内边距（显得更宽大）。
+   原来它无背景无边框地铺在外框里，内外圆角对不上，看着像“框里套了个小框”。 */
+.searchbar input {
+  flex: 1; min-width: 0;
+  background: rgba(255, 255, 255, .06);
+  border: 1px solid var(--glass-border);
+  border-radius: 14px;              /* 与外框同弧度 */
+  padding: 8px 14px;                /* 比原来大 */
+  font-size: 14px; color: var(--text);
+  outline: none; transition: .2s;
+}
+.searchbar input:focus { background: rgba(255, 255, 255, .09);
+  border-color: rgba(123, 140, 255, .55); }
 .filterbar { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; margin: 14px 0 10px; }
 .filterbar .lbl { font-size: 12px; color: var(--text-dim); white-space: nowrap; }
 .filterbar .src-sel { padding: 10px 14px; font-size: 13.5px; }
