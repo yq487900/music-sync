@@ -29,6 +29,12 @@ Progress = Optional[Callable[[str, str, Optional[int], Optional[int]], None]]
 SRC_AUTO = ""            # 网易云官方优先，拿不到完整直链再用第三方
 SRC_OFFICIAL = "netease"  # 只用网易云官方
 
+# 「临时故障」标记：写在 last_error 前缀，plan_downloads 据此改用**短退避**。
+# 场景：音源沙箱（lx-runner）不可用 —— 沙箱恢复后重试通常就能成功，
+# 不该像「这首歌真下不到」那样等 fail_backoff × backoff_hours（默认 24 小时）。
+TRANSIENT_TAG = "[临时故障] "
+TRANSIENT_BACKOFF_MIN = 10      # 临时故障的重试间隔（分钟）
+
 
 def _now() -> str:
     return datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -213,7 +219,11 @@ async def resolve_stream(cfg: Dict[str, Any], tr: Track, ncm: Ncm,
             return {}
 
     only = None if pref in (SRC_AUTO, "auto") else pref
-    got = await lxsource.resolve_url(cfg, tr, only_id=only)
+    try:
+        got = await lxsource.resolve_url(cfg, tr, only_id=only)
+    except lxsource.LxUnavailable as e:
+        # 沙箱整体不可用 —— 临时故障，交给 save_result 打标记 + 短退避自动重试
+        return {"transient": True, "reason": "音源沙箱不可用，稍后会自动重试（%s）" % e}
     if got:
         return {
             "url": got["url"], "level": str(got.get("quality") or ""), "br": 0,
@@ -263,6 +273,10 @@ async def download_track(cfg: Dict[str, Any], tr: Track, task: Any = None) -> Di
     md5hex, size = "", 0
     try:
         entry = await resolve_stream(cfg, tr, ncm, task)
+        if entry.get("transient"):
+            return {"ok": False, "transient": True,
+                    "title": meta["title"], "artist": meta["artist"],
+                    "reason": entry.get("reason") or "音源沙箱不可用"}
         if not entry:
             if pref not in (SRC_AUTO, "auto"):
                 reason = f"{source_label(cfg, pref)}没取到可用音源，可在歌曲右侧改回「自动」再试"
@@ -439,8 +453,14 @@ def save_result(tr_id: int, res: Dict[str, Any]) -> None:
             row.downloaded_at = _now()
         else:
             row.status = "failed"
-            row.last_error = str(res.get("reason") or "未知原因")[:300]
-            row.fail_count = int(row.fail_count or 0) + 1
+            reason = str(res.get("reason") or "未知原因")[:300]
+            if res.get("transient"):
+                # 临时故障：**不累加 fail_count**（不占 24 小时长退避的额度），
+                # 只在 last_error 前面打标记，plan_downloads 看到标记就走短退避。
+                row.last_error = (TRANSIENT_TAG + reason)[:300]
+            else:
+                row.last_error = reason
+                row.fail_count = int(row.fail_count or 0) + 1
             row.downloaded = False
             row.downloaded_at = _now()
         db.commit()
@@ -479,7 +499,17 @@ def plan_downloads(cfg: Dict[str, Any], only_ids: Optional[List[int]] = None,
                     if rank(better) > rank(tr.level):
                         plan.append((tr.id, "upgrade"))
                 continue
-            if backoff_n and int(tr.fail_count or 0) >= backoff_n and tr.downloaded_at and backoff_h:
+            # 临时故障（音源沙箱不可用这类）：**短退避**自动重试。
+            # 沙箱一恢复通常很快就能补上，不该像「这首歌下不到」那样等 24 小时。
+            if str(tr.last_error or "").startswith(TRANSIENT_TAG):
+                if tr.downloaded_at:
+                    try:
+                        last = datetime.datetime.strptime(tr.downloaded_at, "%Y-%m-%d %H:%M:%S")
+                        if (now - last).total_seconds() < TRANSIENT_BACKOFF_MIN * 60:
+                            continue
+                    except ValueError:
+                        pass
+            elif backoff_n and int(tr.fail_count or 0) >= backoff_n and tr.downloaded_at and backoff_h:
                 try:
                     last = datetime.datetime.strptime(tr.downloaded_at, "%Y-%m-%d %H:%M:%S")
                     if (now - last).total_seconds() < backoff_h * 3600:

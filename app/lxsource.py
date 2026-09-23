@@ -66,6 +66,15 @@ class LxError(Exception):
     pass
 
 
+class LxUnavailable(LxError):
+    """音源沙箱当前整体不可用（临时故障）。
+
+    与「这首歌拿不到直链」区分开：沙箱不可用是**基础设施临时抖动**
+    （实测 lx-runner 崩过一次），调用方应当做**短退避重试**，
+    而不是把它当成「这首歌下不到」而进入 24 小时长退避。
+    """
+
+
 def _kb(n: int) -> str:
     return f"{n / 1024:.0f} KB" if n < 1024 * 1024 else f"{n / 1024 / 1024:.1f} MB"
 
@@ -359,6 +368,8 @@ async def resolve_url(cfg: Dict[str, Any], track: Any,
     info = build_music_info(track)
 
     # ---------- 阶段 1：网易云原生 id（先把所有音源跑完，快） ----------
+    tried = 0
+    hard_err = 0          # 因「连不上沙箱」而失败的音源数
     for src in sources:
         platforms = src.get("platforms") or []
         if platforms and LX_PLATFORM not in platforms:
@@ -368,16 +379,30 @@ async def resolve_url(cfg: Dict[str, Any], track: Any,
             continue
         script = str(src.get("script") or "")
         quality = pick_quality(qualities_of(src, LX_PLATFORM))
+        tried += 1
+        hard = False
         try:
             url = await LxRunner.get_url(script, LX_PLATFORM, quality, info)
         except LxError:
+            hard = True
+            hard_err += 1
             url = None
         if url:
             _note_ok(sid)
             return {"url": url, "source": src.get("name") or src.get("id"),
                     "source_id": sid,
                     "quality": quality, "platform": LX_PLATFORM}
+        if hard:
+            # 连不上沙箱 —— 这是**沙箱的锅，不是音源的锅**。
+            # 若计到音源头上，一次沙箱抖动就能把好音源也熔断掉，
+            # 之后连「试都没试」就直接判这首歌失败。
+            continue
         _note_fail(sid)
+
+    # 试过的音源全是「连不上沙箱」→ 是沙箱整体的锅（临时故障），
+    # 直接在阶段 1 就报出来：既不必再跑阶段 2，也便于上层做短退避重试。
+    if tried and hard_err == tried:
+        raise LxUnavailable("音源沙箱不可用（%d 个音源全部连接失败）" % hard_err)
 
     # ---------- 阶段 2：跨平台回退（仅在阶段 1 全失败时） ----------
     keyword = _keyword_of(track)
