@@ -22,7 +22,7 @@
       </div>
     </div>
   </div>
-  <div class="bar indet" id="bar" style="display:none"><i></i></div>
+  <div class="bar" id="bar" style="display:none"><i></i></div>
   <p class="hint" id="progress" style="display:none"></p>
 </div>
 
@@ -42,6 +42,18 @@
     <button class="chip" data-k="cloud" data-v="in" data-n="cloud_in">在云盘<span class="n"></span></button>
     <button class="chip" data-k="cloud" data-v="out" data-n="cloud_out">不在云盘<span class="n"></span></button>
   </div>
+  <div class="btn-row" style="margin:12px 0 4px">
+    <span class="lbl" style="align-self:center;font-size:12px;color:var(--text-dim)">排序</span>
+    <select id="sort-sel" class="src-sel" style="max-width:none" title="列表排序方式">
+      <option value=":asc">歌单原顺序</option>
+      <option value="title:asc">歌名 A→Z</option>
+      <option value="title:desc">歌名 Z→A</option>
+      <option value="artist:asc">歌手 A→Z</option>
+      <option value="artist:desc">歌手 Z→A</option>
+      <option value="time:asc">加入歌单 早→晚</option>
+      <option value="time:desc">加入歌单 晚→早</option>
+    </select>
+  </div>
   <div id="tracks"><div class="empty"><div class="big">⏳</div>正在加载歌曲…</div></div>
   <div class="pager" id="pager" style="display:none"></div>
 </div>
@@ -51,7 +63,7 @@
 {% block script %}
 <script>
 const PID = {{ pid }};
-const ST = {page: 1, size: 20, q: '', local: 'all', cloud: 'all'};
+const ST = {page: 1, size: 20, q: '', local: 'all', cloud: 'all', sort: '', order: 'asc'};
 let NEED_REFRESH = 1;      // 打开页面的第一次请求：让后端重索引一遍云盘
 let SOURCES = {};
 let curItems = [];
@@ -129,6 +141,13 @@ function render(d) {
   });
 }
 
+document.getElementById('sort-sel').onchange = (e) => {
+  const i = e.target.value.indexOf(':');
+  ST.sort = e.target.value.slice(0, i);
+  ST.order = e.target.value.slice(i + 1);
+  ST.page = 1;
+  load();
+};
 function rowOf(el) { return el.closest('.trk'); }
 
 /** 打开歌单时后端会重索引一遍云盘 → 索引跑完自动刷一次列表，然后就停。
@@ -237,7 +256,7 @@ async function load(soft) {
   // 自动刷新 / 翻页 / 筛选 一律 refresh=0 —— 否则会变成「刷新又触发重索引」的死循环
   const r = await jsonReq(`/api/playlists/${PID}/tracks?page=${ST.page}&size=${ST.size}` +
     `&q=${encodeURIComponent(ST.q)}&local=${ST.local}&cloud=${ST.cloud}` +
-    `&refresh=${NEED_REFRESH}`);
+    `&sort=${ST.sort}&order=${ST.order}&refresh=${NEED_REFRESH}`);
   NEED_REFRESH = 0;
   if (!r.ok) {
     if (soft === true) return;
@@ -321,8 +340,9 @@ function pollProgress() {
       if (q.busy) {
         txt.textContent = `下载中：进行 ${q.downloading} · 排队 ${q.queued} · 完成 ${q.done} · 失败 ${q.failed}`;
         const total = q.done + q.failed + q.downloading + q.queued;
-        bar.classList.toggle('indet', !total);
-        bar.querySelector('i').style.width = total ? Math.round((q.done + q.failed) * 100 / total) + '%' : 35;
+        bar.classList.remove('indet');   // 真实进度，不用循环光条
+        bar.querySelector('i').style.width = total
+          ? Math.round((q.done + q.failed) * 100 / total) + '%' : '0%';
       } else {
         clearInterval(window._t);
         txt.textContent = '';

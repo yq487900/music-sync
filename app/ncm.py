@@ -44,13 +44,16 @@ class NcmError(Exception):
 class Ncm:
     """轻量异步客户端：串行限速，避免触发风控"""
 
-    def __init__(self, cookie: str = "", base: Optional[str] = None, delay: float = 0.35):
+    def __init__(self, cookie: str = "", base: Optional[str] = None, delay: float = 0.35,
+                 concurrency: int = 1):
         self.base = (base or NCM_BASE).rstrip("/")
         self.cookie = cookie or "os=pc"
         self._delay = max(0.0, delay)
         self._last = 0.0
         self._session: Optional[aiohttp.ClientSession] = None
         self._lock = asyncio.Lock()
+        # 并发许可：>1 时允许多个请求同时在飞（批量查询用）；默认 1 = 完全串行，行为不变
+        self._sem = asyncio.Semaphore(max(1, int(concurrency)))
 
     # ---------- 底层 ----------
     async def _sess(self) -> aiohttp.ClientSession:
@@ -61,7 +64,8 @@ class Ncm:
         return s
 
     async def _pace(self) -> None:
-        async with self._lock:
+        await self._sem.acquire()      # 先拿并发许可（超出并发的请求在此排队）
+        async with self._lock:         # 再保证两次「发起」之间至少间隔 _delay
             wait = self._delay - (time.monotonic() - self._last)
             if wait > 0:
                 await asyncio.sleep(wait)
@@ -69,24 +73,27 @@ class Ncm:
 
     async def get(self, path: str, **params) -> Dict[str, Any]:
         await self._pace()
-        params.setdefault("timestamp", int(time.time() * 1000))
-        params["cookie"] = self.cookie
-        url = f"{self.base}{path}"
-        last_err: Optional[Exception] = None
-        for attempt in range(3):
-            try:
-                s = await self._sess()
-                async with s.get(url, params=params) as r:
-                    if r.status >= 500:
-                        raise NcmError(f"{path}: HTTP {r.status}")
-                    data = await r.json(content_type=None)
-                if not isinstance(data, dict):
-                    raise NcmError(f"{path}: 返回非 JSON")
-                return data
-            except Exception as e:  # noqa: BLE001
-                last_err = e
-                await asyncio.sleep(1.0 * (attempt + 1))
-        raise NcmError(f"{path}: {last_err}")
+        try:
+            params.setdefault("timestamp", int(time.time() * 1000))
+            params["cookie"] = self.cookie
+            url = f"{self.base}{path}"
+            last_err: Optional[Exception] = None
+            for attempt in range(3):
+                try:
+                    s = await self._sess()
+                    async with s.get(url, params=params) as r:
+                        if r.status >= 500:
+                            raise NcmError(f"{path}: HTTP {r.status}")
+                        data = await r.json(content_type=None)
+                    if not isinstance(data, dict):
+                        raise NcmError(f"{path}: 返回非 JSON")
+                    return data
+                except Exception as e:  # noqa: BLE001
+                    last_err = e
+                    await asyncio.sleep(1.0 * (attempt + 1))
+            raise NcmError(f"{path}: {last_err}")
+        finally:
+            self._sem.release()
 
     async def ready(self) -> bool:
         """ncm-api 是否可用"""
@@ -175,17 +182,27 @@ class Ncm:
         return ids
 
     async def song_detail(self, ids: List[int]) -> List[Dict[str, Any]]:
-        out: List[Dict[str, Any]] = []
-        for i in range(0, len(ids), 100):
-            batch = ",".join(str(x) for x in ids[i:i + 100])
+        """批量取歌曲详情：分块并发（并发度由 self._sem 控制），返回顺序与入参一致"""
+        # 分块加大到 300：2095 首由 21 批降到 7 批，配合并发 8 只跑 1 轮。
+        # 300 个 id 的 URL 约 3.3KB，离 8KB 上限还很远。
+        chunks = [ids[i:i + 300] for i in range(0, len(ids), 300)]
+        if not chunks:
+            return []
+
+        async def one(chunk: List[int]) -> List[Dict[str, Any]]:
+            batch = ",".join(str(x) for x in chunk)
             d = await self.get("/song/detail", ids=batch)
             privs = {int(p["id"]): p for p in (d.get("privileges") or []) if p.get("id") is not None}
+            out: List[Dict[str, Any]] = []
             for s in d.get("songs") or []:
                 sid = s.get("id")
                 if sid is not None and int(sid) in privs and not s.get("privilege"):
                     s["privilege"] = privs[int(sid)]
                 out.append(s)
-        return out
+            return out
+
+        results = await asyncio.gather(*[one(c) for c in chunks])
+        return [s for batch in results for s in batch]
 
     # ---------- 取流 / 歌词 ----------
     async def song_url(self, sid: int, level: str) -> Dict[str, Any]:

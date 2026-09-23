@@ -56,6 +56,15 @@
     <button class="btn mini" id="btn-unselect-all">全部取消</button>
     <button class="btn mini" id="btn-only-failed">只看失败</button>
     <button class="btn mini" id="btn-retry-failed">重试全部失败</button>
+    <span class="lbl" style="align-self:center;font-size:12px;color:var(--text-dim)">排序</span>
+    <select id="sort-sel" class="src-sel" style="max-width:none" title="列表排序方式">
+      <option value="time:desc">加入时间 新→旧</option>
+      <option value="time:asc">加入时间 旧→新</option>
+      <option value="title:asc">歌名 A→Z</option>
+      <option value="title:desc">歌名 Z→A</option>
+      <option value="artist:asc">歌手 A→Z</option>
+      <option value="artist:desc">歌手 Z→A</option>
+    </select>
   </div>
   <!-- 失败汇总：按原因分组，让用户知道“为什么失败”而不只是“有几首失败” -->
   <div class="rt-sum" id="rt-sum" hidden></div>
@@ -67,7 +76,7 @@
 
 {% block script %}
 <script>
-const ST = {page: 1, size: 20, filter: 'all', cloud: 'all', q: ''};
+const ST = {page: 1, size: 20, filter: 'all', cloud: 'all', q: '', sort: 'time', order: 'desc'};
 let SOURCES = {};
 let curItems = [];
 
@@ -77,6 +86,13 @@ function fmtSize(n) {
   if (n >= 1024) return (n / 1024).toFixed(0) + ' KB';
   return n + ' B';
 }
+document.getElementById('sort-sel').onchange = (e) => {
+  const i = e.target.value.indexOf(':');
+  ST.sort = e.target.value.slice(0, i);
+  ST.order = e.target.value.slice(i + 1);
+  ST.page = 1;
+  load();
+};
 /** 失败原因：去掉「下载失败：」前缀并截断，用于曲目行内展示 */
 const shortErr = (s) => String(s || '').replace(/^下载失败[:：]\s*/, '').slice(0, 46) || '未记录原因';
 function sourceSelect(t) {
@@ -186,7 +202,7 @@ function bindRows(box) {
 
 async function load() {
   const r = await jsonReq(`/api/tracks?page=${ST.page}&size=${ST.size}&filter=${ST.filter}` +
-    `&cloud=${ST.cloud}&q=${encodeURIComponent(ST.q)}`);
+    `&cloud=${ST.cloud}&q=${encodeURIComponent(ST.q)}&sort=${ST.sort}&order=${ST.order}`);
   if (!r.ok) { document.getElementById('list').innerHTML = '<div class="empty">加载失败</div>'; return; }
   ST.page = r.data.page; ST.size = r.data.size;
   renderList(r.data);
@@ -219,9 +235,11 @@ function renderQueue(q) {
           <span>${esc(t.artist || '')} · ${state}
             ${t.level ? ' · 音质 ' + esc(t.level) : ''}
             ${t.source ? ' · 音源 ' + esc(t.source) : ''}
-            ${t.total ? ' · ' + fmtSize(t.done) + ' / ' + fmtSize(t.total) : ''}</span>
-          <div class="bar ${t.total ? '' : 'indet'}" style="margin-top:6px">
-            <i style="width:${t.total ? t.percent : 35}%"></i></div>
+            ${t.total ? ' · ' + fmtSize(t.done) + ' / ' + fmtSize(t.total) + '（' + t.percent + '%）'
+                      : (t.done ? ' · 已下载 ' + fmtSize(t.done) : '')}</span>
+          ${t.state === 'downloading'
+            ? `<div class="bar" style="margin-top:6px"><i style="width:${t.total ? t.percent : 0}%"></i></div>`
+            : ''}
           ${t.error ? `<span style="color:var(--err)">${esc(t.error)}</span>` : ''}
         </span>
         <span class="right">

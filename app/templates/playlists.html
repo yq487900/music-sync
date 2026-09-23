@@ -9,7 +9,7 @@
     <button class="btn primary" id="btn-sync"><svg><use href="#ic-refresh"/></svg>立即同步歌单</button>
     <button class="btn" id="btn-reload">刷新列表</button>
   </div>
-  <div class="bar indet" id="bar" style="display:none"><i></i></div>
+  <div class="bar" id="bar" style="display:none"><i></i></div>
   <p class="hint" id="progress" style="display:none"></p>
 </div>
 
@@ -116,8 +116,8 @@ async function pollProgress() {
       if (s.running) {
         txt.textContent = `正在${s.stage || '处理'}：${s.detail || ''}` +
           (s.total ? `（${s.done}/${s.total}）` : '');
-        bar.classList.toggle('indet', !s.total);
-        bar.querySelector('i').style.width = (s.total ? Math.round(s.done / s.total * 100) : 35) + '%';
+        bar.classList.remove('indet');   // 真实进度，不用循环光条
+        bar.querySelector('i').style.width = (s.total ? Math.round(s.done / s.total * 100) : 0) + '%';
       } else {
         clearInterval(window._t);
         bar.style.display = 'none';

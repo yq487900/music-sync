@@ -409,7 +409,44 @@ const TC_Q = [
   {k: 'organize', name: '刷削整理', href: '/organize', unit: '首'},
 ];
 let tcOpenNew = false;
+let TC_OPEN = {};      // 各队列是否展开（key = download/upload/organize）
+let TC_LAST = null;    // 最后一次 /api/status 数据（展开/收起时直接重渲染，不再请求）
+/** 字节格式化（base 内用；避免与各页自己的 fmtSize 撞名） */
+function fmtBytes(n) {
+  n = Number(n) || 0;
+  const u = ['B', 'KB', 'MB', 'GB', 'TB'];
+  let i = 0, v = n;
+  while (v >= 1024 && i < u.length - 1) { v /= 1024; i += 1; }
+  return (i ? v.toFixed(i >= 3 ? 2 : 1) : String(v)) + ' ' + u[i];
+}
+/** 队列里的任务明细（歌名 + 状态 + 实际进度） */
+function tcTasksHtml(tasks) {
+  if (!tasks.length) return '<div class="tc-tasks"><small>暂无任务</small></div>';
+  const label = {queued: '排队中', downloading: '下载中', paused: '已暂停',
+                 done: '已完成', failed: '失败', canceled: '已取消'};
+  const list = tasks.slice(0, 30).map(function (t) {
+    const st = label[t.state] || t.state;
+    const pct = (t.percent != null) ? t.percent : 0;
+    const cls = t.state === 'failed' ? ' f' : (t.state === 'done' ? ' d'
+              : (t.state === 'downloading' ? ' g' : ''));
+    return '<div class="tc-task' + cls + '">'
+      + '<div class="tc-task-t"><span class="tc-task-n">'
+      + esc(t.title || ('#' + t.track_id)) + '</span>'
+      + '<span class="tc-task-s">' + st
+      + (t.state === 'downloading' && t.total ? ' ' + pct + '%' : '') + '</span></div>'
+      + (t.artist ? '<small>' + esc(t.artist) + '</small>' : '')
+      + (t.state === 'downloading'
+          ? '<div class="tc-bar sm"><i style="width:' + (t.total ? pct : 0) + '%"></i></div>'
+          : (t.total ? '<div class="tc-bar sm"><i style="width:' + pct + '%"></i></div>' : ''))
+      + (!t.total && t.done ? '<small>已下载 ' + fmtBytes(t.done) + '</small>' : '')
+      + (t.error ? '<small class="tc-err">' + esc(String(t.error).slice(0, 70)) + '</small>' : '')
+      + '</div>';
+  }).join('');
+  return '<div class="tc-tasks">' + list
+    + (tasks.length > 30 ? '<small>仅显示最近 30 条</small>' : '') + '</div>';
+}
 function tcRender(s) {
+  TC_LAST = s;
   const q = (s && s.queues) || {};
   const rows = TC_Q.map(function (d) {
     const o = q[d.k] || {};
@@ -443,14 +480,20 @@ function tcRender(s) {
   const idleAll = !rows.some(function (r) { return r.total; }) && !running;
   box.innerHTML = rows.map(function (r) {
     const busy = r.o.busy || r.left;
+    const open = !!TC_OPEN[r.d.k];
     const sub = r.total
       ? ('完成 ' + r.done + ' · 失败 ' + r.failed + ' · 待处理 ' + r.left)
       : '空闲';
     return '<div class="tc-row' + (busy ? ' doing' : '') + '">'
-      + '<div class="tc-top"><span class="tc-t">' + r.d.name + '</span>'
+      + '<div class="tc-top">'
+      + '<button class="tc-exp" type="button" data-tcexp="' + r.d.k + '"'
+      + ' aria-expanded="' + (open ? 'true' : 'false') + '" title="展开 / 收起歌曲明细">'
+      + (open ? '\u25be' : '\u25b8') + '</button>'
+      + '<span class="tc-t">' + r.d.name + '</span>'
       + '<span class="tc-n">' + r.done + '/' + r.total + ' ' + r.d.unit + '</span></div>'
       + '<small>' + sub + '</small>'
       + (r.total ? '<div class="tc-bar"><i style="width:' + r.pct + '%"></i></div>' : '')
+      + (open ? tcTasksHtml(((r.o.tasks) || []).slice().reverse()) : '')
       + (r.failed ? '<div class="btn-row" style="margin-top:8px">'
           + '<a class="btn mini" href="' + r.d.href + '">查看 ' + r.failed + ' 个失败</a></div>' : '')
       + '</div>';
@@ -486,6 +529,15 @@ document.getElementById('tc-fab').onclick = function () { tcToggle(); };
 document.getElementById('tc-refresh').onclick = function () { tcPoll(); toast('已刷新', 'ok'); };
 document.getElementById('tc-close').onclick = function () { tcToggle(false); };
 document.getElementById('legend-btn').onclick = openLegend;
+
+/* 任务中心：展开 / 收起某个队列的歌曲明细（用缓存数据重渲染，不重新请求） */
+document.addEventListener('click', function (e) {
+  const b = e.target.closest && e.target.closest('[data-tcexp]');
+  if (!b) return;
+  const k = b.getAttribute('data-tcexp');
+  TC_OPEN[k] = !TC_OPEN[k];
+  if (TC_LAST) tcRender(TC_LAST);
+});
 
 /* 云盘图标（不在云盘）→ 立即下载并转存云盘；本地已有则直接上传 */
 document.addEventListener('click', async function (e) {

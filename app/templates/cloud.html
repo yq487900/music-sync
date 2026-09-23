@@ -519,7 +519,9 @@ function renderQueue(q) {
         <span class="meta">
           <strong>${esc(t.title || '未知曲目')}</strong>
           <span>${esc(t.artist || '')} · ${state} ${pct}</span>
-          <div class="bar ${t.total ? '' : 'indet'}" style="margin-top:6px"><i style="width:${t.total ? t.percent : 35}%"></i></div>
+          ${t.state === 'downloading'
+            ? `<div class="bar" style="margin-top:6px"><i style="width:${t.total ? t.percent : 0}%"></i></div>`
+            : ''}
           ${t.error ? `<span style="color:var(--err)">${esc(t.error)}</span>` : ''}
         </span>
         <span class="right">
@@ -559,8 +561,14 @@ async function pollQueue() {
   const txt = document.getElementById('progress');
   if (q.busy) {
     bar.style.display = ''; txt.style.display = '';
-    bar.classList.toggle('indet', !q.tasks.length);
-    txt.textContent = `上传中：进行 ${q.downloading} · 排队 ${q.queued} · 完成 ${q.done} · 失败 ${q.failed}`;
+    bar.classList.remove('indet');          // 不再用循环光条，改成真实进度
+    const _ut = q.done + q.failed + q.downloading + q.queued;
+    const _ucur = (q.tasks || []).filter(x => x.state === 'downloading')[0] || null;
+    bar.querySelector('i').style.width = _ut
+      ? Math.round((q.done + q.failed) * 100 / _ut) + '%' : '0%';
+    txt.textContent = `上传中：进行 ${q.downloading} · 排队 ${q.queued} · 完成 ${q.done} · 失败 ${q.failed}`
+      + (_ucur ? ` · 当前《${_ucur.title}》`
+                + (_ucur.total ? _ucur.percent + '%' : ('已上传 ' + fmtSize(_ucur.done))) : '');
     clearTimeout(polling);
     polling = setTimeout(() => { pollQueue(); loadQuota(); }, 2000);
   } else {

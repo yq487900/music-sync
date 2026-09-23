@@ -80,7 +80,7 @@
     <button class="btn" id="btn-reload"><svg><use href="#ic-refresh"/></svg>刷新本页</button>
     <a class="btn" href="/download">去下载页管理队列</a>
   </div>
-  <div class="bar indet" id="bar" style="display:none"><i></i></div>
+  <div class="bar" id="bar" style="display:none"><i></i></div>
   <p class="hint" id="progress" style="display:none"></p>
 </div>
 
@@ -245,10 +245,13 @@ async function pollProgress() {
     txt.style.display = '';
     bar.style.display = '';
     const total = q.done + q.failed + q.downloading + q.queued;
-    txt.textContent = `下载中：完成 ${q.done || 0} · 失败 ${q.failed || 0} · 排队 ${q.queued || 0}`;
-    bar.classList.toggle('indet', !total);
+    const cur = ((q.tasks || []).filter(x => x.state === 'downloading'))[0] || null;
+    txt.textContent = `下载中：完成 ${q.done || 0} · 失败 ${q.failed || 0} · 排队 ${q.queued || 0}`
+      + (cur ? ` · 当前《${cur.title}》`
+               + (cur.total ? cur.percent + '%' : ('已下载 ' + fmtSize(cur.done))) : '');
+    bar.classList.remove('indet');    // 不再用循环光条，改成真实进度
     bar.querySelector('i').style.width = total
-      ? Math.round((q.done + q.failed) * 100 / total) + '%' : 35;
+      ? Math.round((q.done + q.failed) * 100 / total) + '%' : '0%';
     clearTimeout(qTimer);
     qTimer = setTimeout(pollProgress, 2000);
   } else {

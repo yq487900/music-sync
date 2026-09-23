@@ -805,7 +805,8 @@ a:focus-visible, button:focus-visible, [role="button"]:focus-visible,
 
 .tc-panel {
   position: fixed; right: 18px; bottom: 74px; z-index: 71;
-  width: min(430px, calc(100vw - 36px)); max-height: min(70dvh, 560px);
+  /* 尺寸比初版放大 1/3 */
+  width: min(572px, calc(100vw - 36px)); max-height: min(74dvh, 746px);
   display: none; flex-direction: column;
   border-radius: 18px; border: 1px solid rgba(255,255,255,.14);
   background: linear-gradient(160deg, #171b33, #12152a);
@@ -851,3 +852,23 @@ a:focus-visible, button:focus-visible, [role="button"]:focus-visible,
   font-size: 11px; font-weight: 400; vertical-align: middle; letter-spacing: 0;
   color: #fca5a5; background: rgba(248,113,113,.16); border: 1px solid rgba(248,113,113,.3);
   max-width: min(46vw, 380px); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* ================= 任务中心：展开按钮 + 歌曲明细 ================= */
+.tc-exp { width: 20px; height: 20px; flex: 0 0 20px; padding: 0; border: 0; cursor: pointer;
+  border-radius: 6px; font-size: 11px; line-height: 1; color: var(--text-dim);
+  background: rgba(255,255,255,.07); font-family: inherit; transition: .18s; }
+.tc-exp:hover { background: var(--glass-bg-hover); color: var(--text); }
+.tc-tasks { margin-top: 8px; padding-top: 8px; border-top: 1px dashed rgba(255,255,255,.1);
+  display: flex; flex-direction: column; gap: 6px; max-height: 260px; overflow-y: auto; }
+.tc-task { padding: 7px 9px; border-radius: 9px; background: rgba(255,255,255,.04);
+  border-left: 2px solid rgba(255,255,255,.14); }
+.tc-task.g { border-left-color: var(--accent-1); }
+.tc-task.d { border-left-color: var(--ok); }
+.tc-task.f { border-left-color: var(--err); }
+.tc-task-t { display: flex; align-items: center; gap: 8px; font-size: 12.5px; }
+.tc-task-n { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tc-task-s { font-size: 11px; color: var(--text-dim); white-space: nowrap; }
+.tc-task small { display: block; font-size: 11px; color: var(--text-dim); margin-top: 2px;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tc-task small.tc-err { color: #fca5a5; }
+.tc-bar.sm { height: 4px; margin-top: 5px; }
