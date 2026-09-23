@@ -60,9 +60,15 @@ class Task:
             self.state = "downloading"
 
     def cancel(self) -> None:
+        """取消任务。
+
+        进行中的：标记取消并中断；
+        **已失败的也算取消** —— 页面只渲染未结束的任务，所以对失败项点「取消」
+        就等于把它从列表里移除（比另开一个 remove 接口简单，语义也说得通）。
+        """
         self.canceled = True
         self._resume.set()
-        if self.state in ("queued", "downloading", "paused"):
+        if self.state in ("queued", "downloading", "paused", "failed"):
             self.state = "canceled"
 
     async def gate(self) -> None:
