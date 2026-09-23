@@ -294,7 +294,7 @@ function cloudTip() {               // 悬停提示里带上「依据几点几�
  * 通用弹窗。
  * @param {string} title    标题
  * @param {string} bodyHtml 正文
- * @param {{noClose?: boolean}} [opts] noClose=true 时不渲染右上角「关闭」
+ * @param {object} [opts] opts.noClose=true 时不渲染右上角「关闭」
  *   （正文自带「取消」的弹窗用它，避免两个关闭入口重复）
  */
 function openModal(title, bodyHtml, opts) {
