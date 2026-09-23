@@ -2,7 +2,7 @@
 /**
  * 洛雪(LX)兼容音源脚本沙箱
  *
- * 提供 /check 与 /url 两个接口，在一个受限 vm 上下文里加载用户导入的音源脚本，
+ * 提供 /check、/url、/search 三个接口，在一个受限 vm 上下文里加载用户导入的音源脚本，
  * 用于在网易云拿不到可用直链时（未登录试听、无版权、会员曲目）从第三方音源取链。
  *
  * 参考实现思路来自 miyin (github.com/qwex888/miyin) 的音源运行时。
@@ -326,6 +326,20 @@ async function load(script) {
       breaker.delete(hash)
       return url
     },
+    async searchMusic(platform, keyword, page, limit) {
+      if (disposed) throw new Error('音源已释放')
+      assertClosed(hash)
+      const info = { keyword, page: page || 1, limit: limit || 30 }
+      const ret = await withTimeout(
+        Promise.resolve().then(() => handlers[0]({ action: 'musicSearch', source: platform, info })),
+        CALL_TIMEOUT_MS, '搜索',
+      )
+      let list = []
+      if (Array.isArray(ret)) list = ret
+      else if (ret && Array.isArray(ret.list)) list = ret.list
+      else if (ret && Array.isArray(ret.data)) list = ret.data
+      return list.filter((x) => x && typeof x === 'object')
+    },
     dispose() {
       disposed = true
       handlers.length = 0
@@ -385,6 +399,18 @@ const server = http.createServer(async (req, res) => {
         platforms: h.platforms, qualityMap: h.qualityMap,
         alerts: h.alerts, logs: h.logs.slice(-30),
       })
+    }
+    if (path === '/search') {
+      const h = await load(script)
+      const platform = String(body.platform || 'wy')
+      const keyword = String(body.keyword || '').trim()
+      if (!keyword) return send(res, 200, { ok: false, error: '缺少搜索关键词' })
+      try {
+        const list = await h.searchMusic(platform, keyword, body.page, body.limit)
+        return send(res, 200, { ok: true, list, count: list.length, logs: h.logs.slice(-10) })
+      } catch (e) {
+        return send(res, 200, { ok: false, error: String((e && e.message) || e), logs: h.logs.slice(-10) })
+      }
     }
     if (path === '/url') {
       const h = await load(script)

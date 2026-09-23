@@ -26,6 +26,9 @@ DEFAULT: Dict[str, Any] = {
         "max_per_run": 0,        # 每轮最多下载数，0=不限
         "fail_backoff": 3,       # 连续失败多少次后进入退避
         "backoff_hours": 24,     # 退避时长
+        # 跨平台回退：网易云音源拿不到直链时，去 QQ音乐/酷狗/酷我/咪咕 搜同名歌
+        # 再让音源取链（搜索用内置接口，不依赖音源是否支持 musicSearch）
+        "source_fallback": True,
     },
     # 第三方音源（洛雪兼容 JS 脚本）
     "music_sources": [],

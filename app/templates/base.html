@@ -290,16 +290,27 @@ function cloudTip() {               // 悬停提示里带上「依据几点几�
 }
 
 /** 简单弹窗：openModal(标题, 内容HTML) 返回遮罩元素（点背景/关闭按钮都能关） */
-function openModal(title, bodyHtml) {
+/**
+ * 通用弹窗。
+ * @param {string} title    标题
+ * @param {string} bodyHtml 正文
+ * @param {{noClose?: boolean}} [opts] noClose=true 时不渲染右上角「关闭」
+ *   （正文自带「取消」的弹窗用它，避免两个关闭入口重复）
+ */
+function openModal(title, bodyHtml, opts) {
+  const o = opts || {};
   const back = document.createElement('div');
   back.className = 'modal-back';
   back.innerHTML = `<div class="modal">
-      <div class="modal-h"><strong>${esc(title)}</strong>
-        <button class="btn mini" data-m="close">关闭</button></div>
+      <div class="modal-h"><strong>${esc(title)}</strong>`
+    + (o.noClose ? '' : '<button class="btn mini" data-m="close">关闭</button>')
+    + `</div>
       <div class="modal-b">${bodyHtml}</div>
     </div>`;
   document.body.appendChild(back);
-  back.querySelector('[data-m=close]').onclick = () => back.remove();
+  // 必须用 querySelectorAll：正文里也可能有 data-m="close"（如转存弹窗的「取消」）。
+  // 原来用 querySelector 只绑了第一个（头部的「关闭」），导致正文那个点了没反应。
+  back.querySelectorAll('[data-m=close]').forEach((b) => { b.onclick = () => back.remove(); });
   back.onclick = (e) => { if (e.target === back) back.remove(); };
   return back;
 }
@@ -580,7 +591,7 @@ document.addEventListener('click', function (e) {
     + '<button class="btn" data-m="close">取消</button>'
     + '<button class="btn primary" data-m="go">'
     + (local ? '上传到云盘' : '下载并转存') + '</button>'
-    + '</div></div>');
+    + '</div></div>', {noClose: true});
   back.querySelector('[data-m=go]').onclick = async function () {
     const btn = this;
     setBusy(btn, true);
