@@ -87,6 +87,13 @@
       <option value="no" data-n="pl_no" data-label="不在">不在</option>
     </select>
 
+    <span class="lbl">已下架</span>
+    <select class="src-sel flt-sel" data-k="delisted" title="已下架筛选">
+      <option value="all" data-n="total" data-label="全部">全部</option>
+      <option value="yes" data-n="delisted_yes" data-label="是">是</option>
+      <option value="no" data-n="delisted_no" data-label="否">否</option>
+    </select>
+
     <div class="searchbar">
       <svg><use href="#ic-search"/></svg>
       <input id="qsearch-cloud" placeholder="搜整个云盘：歌名 / 歌手 / 专辑">
@@ -112,7 +119,7 @@
 <script>
 const LS = {page: 1, size: 20, q: '', sort: '', order: 'asc'};
 // 云盘歌曲：cover=封面/信息（有/缺）、local=在不在本地、pl=在不在歌单
-const CS = {page: 1, size: 20, q: '', cover: 'all', local: 'all', pl: 'all', sort: '', order: 'asc'};
+const CS = {page: 1, size: 20, q: '', cover: 'all', local: 'all', pl: 'all', delisted: 'all', sort: '', order: 'asc'};
 let CS_FRESH = 1;                 // 打开页面第一次请求时让后端重新索引一遍云盘
 const CSEL = new Set();           // 云盘页勾选的 sid（纯前端，不落库）
 let curCloud = [];                // 当前页的云盘条目（供「勾选本页」用）
@@ -223,19 +230,22 @@ function renderCloud(d) {
     <div class="trk row-click" data-sid="${esc(t.sid)}">
       <span class="no"><input type="checkbox" class="sel" title="勾选参与批量操作"></span>
       ${t.cover && t.has_cover
-          ? `<img class="cov" src="${esc(t.cover)}" alt="" loading="lazy">`
+          ? `<img class="cov" src="${esc(coverUrl(t.cover))}" alt="" loading="lazy"
+                  onerror="covFail(this)">`
           : phBox('ic-no-cover', NO_INFO_TIP)}
       <span class="meta">
-        <strong>${esc(t.title)}</strong>
+        <strong>${esc(t.title)}${t.delisted ? '<span class="mk delisted" title="网易云官方已下架：元数据还在，但没有版权、不能在线播放">已下架</span>' : ''}</strong>
         <span>${esc(t.artist)}${t.album ? ' · ' + esc(t.album) : ''}
           ${t.duration ? ' · ' + fmtDur(t.duration) : ''}
-          ${t.file_size ? ' · ' + fmtSize(t.file_size) : ''}</span>
-        ${t.from_us ? '<span class="pill tag-us"><span class="dot-i"></span>本工具上传</span>' : ''}
+          ${t.file_size ? ' · ' + fmtSize(t.file_size) : ''}
+          ${t.add_time_str ? ' · 上传 ' + esc(t.add_time_str) : ''}</span>
+        ${(t.file_name || t.from_us) ? `<span class="fpath mono">${t.file_name ? esc(t.file_name) : ''}${t.from_us ? '<span class="pill tag-us"><span class="dot-i"></span>本工具上传</span>' : ''}</span>` : ''}
       </span>
       <span class="right cld">
+        <span class="sid-tag"${t.matched ? ` data-sid="${esc(t.sid)}" onclick="copySid(this)" title="网易云歌曲 ID（点击复制，手动匹配时可直接粘贴）"` : ''}>${t.matched ? 'ID ' + esc(t.sid) : ''}</span>
         <button class="btn mini" data-edit="${esc(t.sid)}">编辑</button>
         <button class="btn mini" data-dl="${esc(t.sid)}">下载</button>
-        <button class="btn mini" data-del="${esc(t.sid)}">删除</button>
+        <button class="btn mini danger" data-del="${esc(t.sid)}">删除</button>
         ${localCell({local: t.in_local})}
         ${cloudCell({in_cloud: true, local: t.in_local})}
         ${playlistCell(t)}
@@ -407,7 +417,8 @@ function bindCloudEdit(host, item) {
     cands.innerHTML = '<div class="cands">' + items.map((x, i) => `
       <div class="cand" data-i="${i}">
         ${x.cover
-          ? `<img class="cand-cov" src="${esc(x.cover)}" alt="" referrerpolicy="no-referrer" onerror="this.style.visibility='hidden'">`
+          ? `<img class="cand-cov" src="${esc(coverUrl(x.cover))}" alt="" loading="lazy"
+                  referrerpolicy="no-referrer" onerror="covFail(this)">`
           : '<span class="cand-cov"></span>'}
         <strong>${esc(x.name)}</strong>
         <span class="cand-sub">${esc(x.artist)}${x.album ? ' · ' + esc(x.album) : ''}${x.duration ? ' · ' + fmtDur(x.duration) : ''}</span>
@@ -482,7 +493,7 @@ function bindCloudEdit(host, item) {
 async function loadCloud() {
   const box = document.getElementById('cloud-list');
   const r = await jsonReq(`/api/cloud?page=${CS.page}&size=${CS.size}&q=${encodeURIComponent(CS.q)}`
-    + `&cover=${CS.cover}&local=${CS.local}&pl=${CS.pl}&sort=${CS.sort}&order=${CS.order}&fresh=${CS_FRESH}`);
+    + `&cover=${CS.cover}&local=${CS.local}&pl=${CS.pl}&delisted=${CS.delisted}&sort=${CS.sort}&order=${CS.order}&fresh=${CS_FRESH}`);
   CS_FRESH = 0;                   // 只有打开页面那一次强制重索引
   if (!r.ok) {
     box.innerHTML = `<div class="empty"><div class="big">🔑</div>${esc(r.data.error || '加载失败')}
@@ -511,7 +522,7 @@ function paintCloudSel() {
 }
 function cloudQuery(extra) {
   return `page=1&size=1&q=${encodeURIComponent(CS.q)}&cover=${CS.cover}`
-    + `&local=${CS.local}&pl=${CS.pl}&sort=${CS.sort}&order=${CS.order}&fresh=0` + (extra || '');
+    + `&local=${CS.local}&pl=${CS.pl}&delisted=${CS.delisted}&sort=${CS.sort}&order=${CS.order}&fresh=0` + (extra || '');
 }
 document.getElementById('cs-selpage').onclick = () => {
   curCloud.forEach(t => CSEL.add(String(t.sid)));
@@ -659,6 +670,9 @@ function renderQueue(q) {
       queued: '排队中', downloading: '上传中', paused: '已暂停',
       done: '已完成', failed: '失败', canceled: '已取消'
     }[t.state] || t.state;
+    // 失败退避中的任务：显示还有几秒重试（退到队尾、不占队列，别的歌照常传）
+    const wait = (t.state === 'queued' && t.retry_in > 0)
+      ? ('（' + t.retry_in + 's 后重试）') : '';
     const pct = t.total ? `${t.percent}%（${fmtSize(t.done)} / ${fmtSize(t.total)}）` : '';
     return `
       <div class="trk">
@@ -666,11 +680,13 @@ function renderQueue(q) {
         ${phBox(t.state === 'done' ? 'ic-cloud' : 'ic-up')}
         <span class="meta">
           <strong>${esc(t.title || '未知曲目')}</strong>
-          <span>${esc(t.artist || '')} · ${state} ${pct}</span>
+          <span>${esc(t.artist || '')} · ${state}${wait} ${pct}</span>
           ${t.state === 'downloading'
             ? `<div class="bar" style="margin-top:6px"><i style="width:${t.total ? t.percent : 0}%"></i></div>`
             : ''}
           ${t.error ? `<span style="color:var(--err)">${esc(t.error)}</span>` : ''}
+          ${(t.state === 'queued' && t.retry_note)
+            ? `<span class="hint">${esc(t.retry_note)}</span>` : ''}
         </span>
         <span class="right">
           ${t.state === 'failed'

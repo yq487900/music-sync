@@ -49,6 +49,13 @@
       <option value="out" data-n="cloud_out" data-label="不在云盘">不在云盘</option>
     </select>
 
+    <span class="lbl">已下架</span>
+    <select class="src-sel flt-sel" data-k="delisted" title="已下架筛选">
+      <option value="all" data-n="total" data-label="全部">全部</option>
+      <option value="yes" data-n="delisted_yes" data-label="是">是</option>
+      <option value="no" data-n="delisted_no" data-label="否">否</option>
+    </select>
+
     <div class="searchbar">
       <svg><use href="#ic-search"/></svg>
       <input id="qsearch" placeholder="搜歌名 / 歌手 / 专辑">
@@ -70,7 +77,7 @@
 {% block script %}
 <script>
 const PID = {{ pid }};
-const ST = {page: 1, size: 20, q: '', local: 'all', cloud: 'all', sort: '', order: 'asc'};
+const ST = {page: 1, size: 20, q: '', local: 'all', cloud: 'all', delisted: 'all', sort: '', order: 'asc'};
 let NEED_REFRESH = 1;      // 打开页面的第一次请求：让后端重索引一遍云盘
 let SOURCES = {};
 let curItems = [];
@@ -105,7 +112,13 @@ function render(d) {
     `共 ${d.total} 首 · 本地已有 ${d.local_count} 首`;
   if (d.cover) {
     const img = document.getElementById('cover');
-    img.src = d.cover; img.style.display = '';
+    img.onerror = () => {
+      img.onerror = null;
+      img.style.display = 'none';
+      const ph = document.getElementById('cover-ph');
+      if (ph) ph.style.display = '';
+    };
+    img.src = coverUrl(d.cover); img.style.display = '';
     document.getElementById('cover-ph').style.display = 'none';
   }
   SOURCES = d.sources || {};
@@ -123,13 +136,15 @@ function render(d) {
       <span class="no">
         <input type="checkbox" class="sel" ${t.selected ? 'checked' : ''} title="勾选参与批量下载">
       </span>
-      ${t.cover ? `<img class="cov" src="${esc(t.cover)}" alt="" loading="lazy">`
+      ${t.cover ? `<img class="cov" src="${esc(coverUrl(t.cover))}" alt="" loading="lazy"
+                        onerror="covFail(this)">`
                 : phBox('ic-note')}
       <span class="meta">
-        <strong>${t.index}. ${esc(t.title)}</strong>
+        <strong>${t.index}. ${esc(t.title)}${t.delisted ? '<span class="mk delisted" title="网易云官方已下架：元数据还在，但没有版权、不能在线播放">已下架</span>' : ''}</strong>
         <span>${esc(t.artist || '')}${t.album ? ' · ' + esc(t.album) : ''}${t.duration ? ' · ' + fmtDur(t.duration) : ''}${qualTag(t)}</span>
       </span>
       <span class="right ops">
+        <span class="sid-tag"${t.sid ? ` data-sid="${t.sid}" onclick="copySid(this)" title="网易云歌曲 ID（点击复制）"` : ''}>${t.sid ? 'ID ' + t.sid : ''}</span>
         ${sourceSelect(t)}
         <button class="btn mini" data-dl="${t.track_id || ''}" data-sid="${t.sid}">下载</button>
         ${localCell(t)}
@@ -262,7 +277,7 @@ async function load(soft) {
   // 只有「真正打开页面」的那一次带 refresh=1（触发云盘重索引）；
   // 自动刷新 / 翻页 / 筛选 一律 refresh=0 —— 否则会变成「刷新又触发重索引」的死循环
   const r = await jsonReq(`/api/playlists/${PID}/tracks?page=${ST.page}&size=${ST.size}` +
-    `&q=${encodeURIComponent(ST.q)}&local=${ST.local}&cloud=${ST.cloud}` +
+    `&q=${encodeURIComponent(ST.q)}&local=${ST.local}&cloud=${ST.cloud}&delisted=${ST.delisted}` +
     `&sort=${ST.sort}&order=${ST.order}&refresh=${NEED_REFRESH}`);
   NEED_REFRESH = 0;
   if (!r.ok) {

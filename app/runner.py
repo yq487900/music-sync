@@ -19,7 +19,7 @@ import app.cloud_index as cloud_index
 import app.config as config
 import app.organize as organize
 from app.db.models import SessionLocal, Track
-from app.ncm import NcmError
+from app.ncm import Ncm, NcmError
 from app.nfo import write_song_nfo
 from app.queue import Queue, Task
 from app.sync.netease import (_meta_of, _ncm, _now, download_track,
@@ -29,6 +29,21 @@ from app.sync.netease import (_meta_of, _ncm, _now, download_track,
 # ------------------------------------------------- 上传后校准（以歌单数据为准）
 CALIBRATE_LOG = Path("/data/calibrate.jsonl")      # 每次校准改了什么，都记一行
 _FIELD_CN = {"title": "歌名", "artist": "歌手", "album": "专辑"}
+# 校准力度（cloud.calibrate_mode）：
+#   off  一个字节都不动本地文件（云盘那边照样匹配正式曲目）
+#   fill 只补空：本地缺歌名/歌手/专辑/封面/歌词才补上，**已有的值一律不覆盖**（默认）
+#   full 按网易云官方信息逐项核对并纠正（会覆盖你手改过的值）
+CALIBRATE_MODES = ("off", "fill", "full")
+_MODE_CN = {"off": "不改本地", "fill": "只补空", "full": "全量纠正"}
+
+
+def calibrate_mode(cfg: Dict[str, Any]) -> str:
+    """读「上传后自动校准」的力度；老配置只写了布尔 calibrate 时按它换算"""
+    cloud = cfg.get("cloud") or {}
+    mode = str(cloud.get("calibrate_mode") or "").strip().lower()
+    if mode in CALIBRATE_MODES:
+        return mode
+    return "full" if bool(cloud.get("calibrate", True)) else "off"
 
 
 def _md5(data: bytes) -> str:
@@ -59,12 +74,13 @@ async def _cover_from_playlist(url: str) -> Optional[bytes]:
     return got
 
 
-def _log_calibration(sid: str, title: str, changes: List[str]) -> None:
+def _log_calibration(sid: str, title: str, changes: List[str], mode: str = "") -> None:
     """把这次校准改了哪些信息写进 /data/calibrate.jsonl（排查 / 回看用）"""
     try:
         with open(CALIBRATE_LOG, "a", encoding="utf-8") as fh:
             fh.write(json.dumps({"at": _now(), "sid": sid, "title": title,
-                                 "changes": changes}, ensure_ascii=False) + "\n")
+                                 "mode": mode or "full", "changes": changes},
+                                ensure_ascii=False) + "\n")
     except OSError:
         pass
 
@@ -83,11 +99,81 @@ async def _download_runner(task: Task, cfg: Dict[str, Any]) -> None:
             task.fail(res.get("reason") or "下载失败")
             return
         task.done_with(source=res.get("source") or "", level=res.get("level") or "")
+        # 元数据已齐全（下载时已写入官方 歌名/歌手/专辑/封面/歌词 + 网易云 id）
+        # → 自动归档进「整理后」，不用再手动刮削一次
+        if bool(((cfg.get("library") or {}).get("auto_archive", True))):
+            fp = str(res.get("file_path") or "")
+            if fp and organize.is_meta_complete(Path(fp)):
+                dest = organize.move_into_library(Path(fp), cfg)
+                if dest:
+                    db.refresh(tr)
+                    tr.file_path = dest
+                    db.commit()
+                    _task_note(task, "元数据齐全，已自动归档")
     finally:
         db.close()
     # 全局 auto_upload，或本次请求勾了「下载并转存云盘」
     if bool((cfg.get("cloud") or {}).get("auto_upload")) or getattr(task, "to_cloud", False):
         enqueue_upload(task.track_id)
+
+
+async def add_to_playlists(cfg: Dict[str, Any], sids: List[str],
+                           pids: List[str]) -> Dict[str, Any]:
+    """把歌曲（网易云正式曲目 id）加进若干歌单。
+
+    sids 必须是**正式曲目 id**（云盘里没匹配到正式曲目的条目拿不到歌单可用的 id）。
+    「上传到云盘并加入歌单」和云盘页的「添加到歌单」共用这一份实现。
+    """
+    cookie = str(((cfg.get("platforms") or {}).get("netease") or {}).get("cookie") or "")
+    uid = str(((cfg.get("platforms") or {}).get("netease") or {}).get("user_id") or "")
+    if not cookie:
+        return {"added_to": [], "failed": [{"pid": p, "msg": "还没登录网易云"} for p in pids]}
+    ncm = Ncm(cookie=cookie)
+    added: List[str] = []
+    failed: List[Dict[str, str]] = []
+    try:
+        for pid in pids:
+            try:
+                # 这个 ncm-api（@neteasecloudmusicapienhanced）里正确、且用网易云**新版**上游
+                # 接口的路由是 /playlist/tracks：op=add/del + pid + tracks（逗号分隔）。
+                # 踩过的坑：/playlist/manipulate/tracks 这个路由压根不存在（返回空 body）；
+                # /playlist/track/add 存在但用的是网易云已废弃的旧接口（恒回 401 无权限操作歌单）
+                r = await ncm.get("/playlist/tracks", op="add", pid=pid,
+                                  tracks=",".join(str(x) for x in sids))
+                code = str((r or {}).get("status") or (r or {}).get("code") or "")
+                if code in ("200", "201") or (r or {}).get("body"):
+                    added.append(str(pid))
+                else:
+                    failed.append({"pid": str(pid),
+                                   "msg": str((r or {}).get("message") or f"code={code}")})
+            except NcmError as e:
+                failed.append({"pid": str(pid), "msg": str(e)})
+    finally:
+        await ncm.close()
+    if added and uid:
+        try:      # 歌单变了 → 把歌单索引刷一遍（云盘页的「在歌单」状态跟着更新）
+            from app.playlist_index import index as pl_index
+            pl_index.ensure_async(cookie, uid, force=True)
+        except Exception:  # noqa: BLE001
+            pass
+    return {"added_to": added, "failed": failed, "count": len(added)}
+
+
+def _task_note(task: Task, text: str) -> None:
+    """把一句结果附到任务的「来源」上（队列列表里能看到），已写过的同句不重复加"""
+    text = str(text or "").strip()
+    if not text or text in str(task.source or ""):
+        return
+    task.source = (f"{task.source} · {text}" if task.source else text)
+
+
+# 上传失败后「退到队尾、稍后再来」的等待节奏（秒）。两类原因各自独立计数、各有各的预算：
+#   parse  —— 网易云偶发 409「音频解析失败」（与文件无关，实测原样重传就过）→ 退避短
+#   server —— 5xx（网关 / 上游抖动）或连接被掐、读超时
+# 注意：等待期间任务会**退回排队状态、不占住队列**（Queue.requeue 把它挪到队尾），
+# 后面的歌照常上传，所以这里的数值只决定「这首歌自己多久后再试」，不再拖累别人。
+# 想更快就调这个元组；次数 = 元组长度（各 3 次重试，连首次共 4 次尝试）。
+UPLOAD_RETRY_PLAN = {"parse": (2, 4, 8), "server": (3, 6, 12)}
 
 
 async def _upload_runner(task: Task, cfg: Dict[str, Any]) -> None:
@@ -109,19 +195,70 @@ async def _upload_runner(task: Task, cfg: Dict[str, Any]) -> None:
             db.commit()
             task.fail("本地文件不存在")
             return
-        if tr.cloud_sid:
-            task.done_with(source="网易云云盘")
-            return
-
-        data = await cloud.upload(cookie, path)
-        # 网易云偶发 409「音频解析失败」（与文件本身无关，实测同样文件再传即可过）→ 重试
-        for attempt in (1, 2):
-            if cloud.upload_ok(data) or int(data.get("code") or 0) != 409:
-                break
-            print(f"[cloud] {path.name} 被网易云判 409（音频解析失败），第 {attempt} 次重传…",
+        ci = cloud_index.index
+        sid = str(tr.cloud_sid or "")
+        mode = str(getattr(task, "cloud_mode", "") or "")
+        # 曲目库记着「传过」还不够，必须跟云盘核对一次：那条可能已经被删掉了
+        # （用户在网易云 App 删的、或换了账号）。不核对就会死锁 —— 云盘里明明没有，
+        # 这里却永远跳过上传，页面上又显示「在云盘」不给点（2026-09-24 用户实测踩到）。
+        gone = bool(sid) and ci.ready and sid not in ci.entry_ids
+        if gone:
+            print(f"[cloud] {path.name}：曲目库记的云盘条目 {sid} 已不在云盘，清掉记录重新上传",
                   flush=True)
-            await asyncio.sleep(3 * attempt)
+            tr.cloud_sid, tr.cloud_state, tr.cloud_error = "", "", ""
+            db.commit()
+        elif sid and mode == "":
+            # 确实还在云盘、也没要求重传：不用再传，但如果这次要的是「加入歌单」，歌单还得加上
+            _task_note(task, "网易云云盘")
+            await _add_task_to_playlists(cfg, tr, task)
+            return
+        elif sid and mode == "replace":
+            # 「替换」：先删掉云盘上旧的那一条，再传新的。删失败不中断上传，只是退化成新增一份
+            try:
+                res = await cloud.delete(cookie, sid)
+                code = str((res or {}).get("code") or (res or {}).get("status") or "")
+                if code in ("200", "201"):
+                    print(f"[cloud] {path.name}：已删除云盘上的旧条目 {sid}，准备重传", flush=True)
+                else:
+                    _task_note(task, f"云盘旧条目没删掉（返回 code={code}），已改为新增一份")
+            except NcmError as e:
+                _task_note(task, f"云盘旧条目没删掉（{e}），已改为新增一份")
+            tr.cloud_sid, tr.cloud_state, tr.cloud_error = "", "", ""
+            db.commit()
+        # mode == "again"：直接往下走，再传一份新的（传成功后 cloud_sid 会被新的覆盖）
+
+        # 上传一次；失败且值得重传 → 退回队尾稍后再来（不占队列），否则按失败处理
+        err: Optional[cloud.UploadError] = None
+        data: Dict[str, Any] = {}
+        try:
             data = await cloud.upload(cookie, path)
+        except cloud.UploadError as e:
+            err = e
+        if err is not None:
+            kind = "server" if err.retryable else ""
+            why = f"HTTP 异常：{err}"
+        elif cloud.upload_ok(data):
+            kind, why = "", ""
+        else:
+            kind = cloud.upload_retry_kind(data)
+            why = f"接口返回 code={data.get('code')}"
+
+        if kind:
+            plan = UPLOAD_RETRY_PLAN.get(kind) or ()
+            n = int(task.retries.get(kind, 0))
+            if n < len(plan):
+                task.retries[kind] = n + 1
+                wait = plan[n]
+                print(f"[cloud] {path.name} 上传失败（{why}），退到队尾 {wait}s 后重试"
+                      f"（不占队列，后面的歌先走）", flush=True)
+                UPLOADS.requeue(task, wait, f"第 {n + 1} 次重试：{why}")
+                return
+        if err is not None:         # 重试耗尽 / 不该重试的错 → 真失败
+            tr.cloud_state = "failed"
+            tr.cloud_error = str(err)[:300]
+            db.commit()
+            task.fail(str(err))
+            return
         code = data.get("code")
         sid = cloud.uploaded_song_id(data)
         if not cloud.upload_ok(data) or not sid:
@@ -140,44 +277,94 @@ async def _upload_runner(task: Task, cfg: Dict[str, Any]) -> None:
         db.commit()
         # 立刻登记进云盘索引：否则最多 10 分钟内页面会把这歌显示成「不在云盘」
         cloud_index.index.note_upload(sid, tr.title or "", tr.artist or "")
-        task.done_with(source="网易云云盘")
+        # 用 _task_note 而不是 done_with(source=…)：后者会覆盖掉前面「旧条目没删掉」这类提示
+        _task_note(task, "网易云云盘")
 
         # 上传后：匹配曲库 → 再按「歌单里的数据」校准本地封面 / 专辑 / 歌词 / NFO
         await _enrich_after_upload(cfg, cookie, tr, sid, db)
+
+        # 「上传到云盘并加入歌单」→ 上传成功后再把它加进用户选的那几个歌单
+        await _add_task_to_playlists(cfg, tr, task)
+
+        # 上传后删除本地（可选）：开关开启 → 本地文件连同封面/歌词/NFO 一起移进回收站。
+        # 放在校准/加歌单之后 —— 校准要写本地文件，删早了就没得写了。
+        if bool(((cfg.get("cloud") or {}).get("delete_local_after_upload", False))):
+            fp = str(tr.file_path or "")
+            if fp:
+                p = Path(fp)
+                if p.exists():
+                    res = organize.to_trash([fp], str(organize.music_base(cfg)))
+                    if res.get("count"):
+                        organize.drop_cache_entry(fp)
+                        tr.status = "new"
+                        tr.downloaded_at = ""
+                        db.commit()
+                        _task_note(task, "已删除本地文件（入回收站）")
     finally:
         db.close()
 
 
+async def _add_task_to_playlists(cfg: Dict[str, Any], tr: Track, task: Task) -> None:
+    """上传成功 → 把这首歌加进任务里带的歌单（整理页那两个上传选项里的第二个）
+
+    加歌单只能用**正式曲目 id**：外来的本地歌如果没有这个 id，就只能传上云盘、
+    加不了歌单（网易云不认它的音频时绑不上正式曲目），要如实告诉用户，别假装成功。
+    """
+    pids = [str(x) for x in (getattr(task, "to_playlists", None) or [])]
+    if not pids:
+        return
+    sid = str(tr.platform_track_id or "")
+    if not sid.isdigit():
+        _task_note(task, "已传云盘，但加不了歌单：这首歌还没对上网易云的正式曲目")
+        print(f"[upload] {tr.title or ''}：没有正式曲目 id，跳过加入歌单", flush=True)
+        return
+    try:
+        res = await add_to_playlists(cfg, [sid], pids)
+    except Exception as e:  # noqa: BLE001
+        _task_note(task, f"加入歌单失败：{type(e).__name__}")
+        return
+    if res.get("added_to"):
+        _task_note(task, f"已加入 {len(res['added_to'])} 个歌单")
+    if res.get("failed"):
+        _task_note(task, f"{len(res['failed'])} 个歌单没加成：{res['failed'][0].get('msg')}")
+
+
 async def _enrich_after_upload(cfg: Dict[str, Any], cookie: str, tr: Track,
                                sid: str, db) -> None:
-    """上传完成后：① 让云盘条目匹配到正式曲目 ② 按「歌单里的数据」校准本地文件
+    """上传完成后：① 让云盘条目匹配到正式曲目 ② 按配置的力度校准本地文件
 
     ① 匹配：网易云不保存上传文件里的封面，云盘条目**只有匹配到正式曲目才有封面**。
+       这一步**始终执行，不受校准开关影响** —— 它决定云盘上显示成哪首歌、有没有封面，
+       跟「本地文件要不要被改」是两件独立的事（2026-09-24 解耦）。
 
-    ② 校准：以**歌单里这首歌**（platform_track_id，也就是他在歌单里看到的那条）的
-       网易云官方信息为准，逐项核对并纠正本地文件的
-       歌名 / 歌手 / 专辑 / 封面 / 歌词，并刷新 NFO 与整理页缓存。
+    ② 校准本地文件，力度看 cloud.calibrate_mode：
+       off  一个字节都不动；
+       fill 只补空（本地缺的才补，已有的值一律不覆盖）—— 默认；
+       full 按网易云官方信息逐项核对并纠正（会覆盖手改过的值）。
+       标准信息取自 platform_track_id 那首歌的官方数据，并刷新 NFO 与整理页缓存。
 
     硬规则（都是实测踩出来的，别再放宽）：
       * 占位图（< 8 KB 灰底红音符）一律不写进本地文件；
       * 网易云没有的字段绝不写空（沿用本地现值）；
-      * 只有确实不一致才动文件，每处改动都打进日志与 /data/calibrate.jsonl。
+      * 只有确实要动才写文件，每处改动都打进日志与 /data/calibrate.jsonl。
     """
-    if not bool((cfg.get("cloud") or {}).get("calibrate", True)):
-        return                                   # 配置页把「上传后自动校准」关了
     target = str(tr.platform_track_id or "")
     if not target.isdigit():
-        return                                   # 没有网易云歌曲 id（外来文件），无从校准
+        return                                   # 没有网易云歌曲 id（外来文件、又没刮削过）
+    mode = calibrate_mode(cfg)
     ncm = _ncm(cfg)
     try:
         uid = str(((cfg.get("platforms") or {}).get("netease") or {}).get("user_id") or "")
-        # ① 云盘条目 → 正式曲目
+        # ① 云盘条目 → 正式曲目（跟校准开关无关：不匹配的话云盘上没封面、也不是正式曲目）
         if uid and sid and str(sid) != target:
             try:
                 await cloud.match(cookie, uid, sid, target)
             except NcmError:
                 pass
-        # ② 歌单标准：这首歌在网易云的官方信息（= 他歌单里那条的数据）
+        if mode == "off":
+            print(f"[calibrate] {tr.title or target}：校准已关闭，本地文件不动", flush=True)
+            return
+        # ② 官方标准：这首歌在网易云的信息（= 他歌单里那条的数据）
         songs = await ncm.song_detail([int(target)])
         if not songs:
             print(f"[calibrate] {tr.title or target}：取不到网易云信息，跳过", flush=True)
@@ -196,28 +383,35 @@ async def _enrich_after_upload(cfg: Dict[str, Any], cookie: str, tr: Track,
             return
         local = organize.inspect(path)           # 现读文件里现有的信息
         changes: List[str] = []
+        filling = (mode == "fill")               # 只补空：本地已有的一律不覆盖
 
-        # 歌名 / 歌手 / 专辑：以歌单为准
+        # 歌名 / 歌手 / 专辑：full = 以官方为准；fill = 只在本地为空时补
         for key in ("title", "artist", "album"):
             want = str(std.get(key) or "").strip()
             have = str(local.get(key) or "").strip()
-            if want and want != have:
-                changes.append(f"{_FIELD_CN[key]}：{have or '（空）'} → {want}")
+            if not want or want == have:
+                continue
+            if not have:
+                changes.append(f"{_FIELD_CN[key]}：（空） → {want}")
+            elif not filling:
+                changes.append(f"{_FIELD_CN[key]}：{have} → {want}")
 
-        # 封面：本地没有 → 补上；和歌单那张不是同一张 → 换成歌单那张
+        # 封面：本地没有 → 补上（两种模式都补，不覆盖任何东西）；
+        # 本地有但是另一张 → 只有 full 才换（fill 尊重你自己放的那张）
         cover = None
         std_cover = await _cover_from_playlist(std.get("pic_url"))
         if std_cover:
             cur = organize.current_cover(path)
             if not cur:
-                changes.append(f"封面：本地没有 → 用歌单封面（{len(std_cover) // 1024} KB）")
+                changes.append(f"封面：本地没有 → 用官方封面（{len(std_cover) // 1024} KB）")
                 cover = std_cover
-            elif _md5(cur) != _md5(std_cover):
-                changes.append(f"封面：本地那张和歌单的不是同一张 → 换成歌单封面"
+            elif _md5(cur) != _md5(std_cover) and not filling:
+                changes.append("封面：本地那张和官方不是同一张 → 换成官方封面"
                                f"（{len(cur) // 1024} KB → {len(std_cover) // 1024} KB）")
                 cover = std_cover
 
-        # 歌词：以歌单为准（网易云没有歌词时保留本地的，不清空）
+        # 歌词：本地没有 → 补上；与官方不同 → 只有 full 才覆盖。
+        # 官方没有歌词时保留本地的，绝不清空。
         lrc = ""
         try:
             lrc = await ncm.lyric(int(target)) or ""
@@ -226,24 +420,48 @@ async def _enrich_after_upload(cfg: Dict[str, Any], cookie: str, tr: Track,
         lrc_out: Optional[str] = None            # None = 不动歌词
         if lrc.strip():
             have_lrc = organize.current_lyrics(path)
-            if not _same_text(lrc, have_lrc):
-                changes.append("歌词：" + ("本地没有" if not have_lrc.strip()
-                                          else "与歌单的不一样")
-                               + f" → 写入 {len(lrc.splitlines())} 行")
+            if not have_lrc.strip():
+                changes.append(f"歌词：本地没有 → 写入 {len(lrc.splitlines())} 行")
+                lrc_out = lrc
+            elif not _same_text(lrc, have_lrc) and not filling:
+                changes.append(f"歌词：与官方的不一样 → 写入 {len(lrc.splitlines())} 行")
                 lrc_out = lrc
 
         if not changes:
-            print(f"[calibrate] {tr.title or target}：与歌单数据一致，未改动文件", flush=True)
+            print(f"[calibrate] {tr.title or target}：与官方数据一致，未改动文件"
+                  f"（{_MODE_CN.get(mode, mode)}）", flush=True)
             return
-        # 确实有变化：写标签（空字段用文件现值兜底，绝不写空）
+
+        def _keep(key: str, cast=str):
+            """取这一项要写进文件的值
+
+            fill：本地已有就保留（只补空）；full：官方优先、官方空则退回本地。
+            两种模式都**绝不写空**。
+            """
+            first, second = ((local, std) if filling else (std, local))
+            a, b = first.get(key), second.get(key)
+            if cast is int:
+                try:
+                    n = int(a or 0)
+                except (TypeError, ValueError):
+                    n = 0
+                if n:
+                    return n
+                try:
+                    return int(b or 0)
+                except (TypeError, ValueError):
+                    return 0
+            return str(a or "").strip() or str(b or "").strip()
+
+        # 确实要动：写标签（空字段用另一边的值兜底，绝不写空）
         meta = {
-            "title": str(std.get("title") or local.get("title") or ""),
-            "artist": str(std.get("artist") or local.get("artist") or ""),
-            "album": str(std.get("album") or local.get("album") or ""),
-            "album_artist": str(std.get("album_artist") or local.get("album_artist") or ""),
-            "track": int(std.get("track") or local.get("track") or 0),
-            "disc": int(std.get("disc") or local.get("disc") or 0),
-            "date": str(std.get("date") or local.get("date") or ""),
+            "title": _keep("title"),
+            "artist": _keep("artist"),
+            "album": _keep("album"),
+            "album_artist": _keep("album_artist"),
+            "track": _keep("track", int),
+            "disc": _keep("disc", int),
+            "date": _keep("date"),
             "pic_url": str(al.get("picUrl") or std.get("pic_url") or ""),
             "sid": std.get("sid") or target,
         }
@@ -270,9 +488,9 @@ async def _enrich_after_upload(cfg: Dict[str, Any], cookie: str, tr: Track,
                 write_song_nfo(path.with_suffix(".nfo"), meta, int(tr.duration or 0))
             except OSError:
                 pass
-        print(f"[calibrate] {meta['title']}（{target}）已按歌单数据校准："
-              + "；".join(changes), flush=True)
-        _log_calibration(target, meta["title"], changes)
+        print(f"[calibrate] {meta['title']}（{target}）已按官方数据校准"
+              f"（{_MODE_CN.get(mode, mode)}）：" + "；".join(changes), flush=True)
+        _log_calibration(target, meta["title"], changes, mode)
     except Exception as e:  # noqa: BLE001
         print(f"[calibrate] 校准失败: {type(e).__name__}: {e}", flush=True)
     finally:
@@ -281,6 +499,20 @@ async def _enrich_after_upload(cfg: Dict[str, Any], cookie: str, tr: Track,
 
 # ---------------------------------------------------------------- 整理队列
 _ORGANIZE_SEQ = itertools.count(1)
+
+
+def _is_in_library(cfg, file_path) -> bool:
+    """本地已存在 = 文件在整理后目录 /music/musics 下且存在"""
+    if not file_path:
+        return False
+    p = Path(str(file_path))
+    if not p.exists():
+        return False
+    lib = Path(str(cfg.get("library_dir") or "/music/musics")).resolve()
+    try:
+        return p.resolve().is_relative_to(lib)
+    except (OSError, ValueError):
+        return False
 
 
 async def _organize_runner(task: Task, cfg: Dict[str, Any]) -> None:
@@ -298,6 +530,16 @@ async def _organize_runner(task: Task, cfg: Dict[str, Any]) -> None:
     task.artist = str(m.get("artist") or task.artist)
     marks = [k for k, v in (("封面", res.get("cover")), ("歌词", res.get("lyrics"))) if v]
     task.done_with(source="、".join(marks) or "仅标签")
+    if res.get("moved_to"):
+        db = SessionLocal()
+        try:
+            rows = db.query(Track).filter(Track.file_path == str(task.path)).all()
+            for tr in rows:
+                tr.file_path = res["moved_to"]
+            if rows:
+                db.commit()
+        finally:
+            db.close()
     if getattr(task, "to_upload", False):
         try:
             enqueue_upload(task.track_id)
@@ -403,7 +645,7 @@ async def monitor_playlists(dry: bool = False,
         for sid in pl_index.candidates(mode, since):
             scanned += 1
             tr = rows.get(sid)
-            local = bool(tr is not None and tr.status == "ok" and tr.file_path)
+            local = bool(tr is not None and tr.status == "ok" and _is_in_library(cfg, tr.file_path))
             in_cloud = ci.lookup(sid, (tr.title if tr is not None else ""),
                                  (tr.artist if tr is not None else ""),
                                  (tr.cloud_sid if tr is not None else "") or "")
@@ -563,14 +805,102 @@ def enqueue_download_one(track_id: int, cfg: Dict[str, Any],
         db.close()
 
 
-def enqueue_upload(track_id: int) -> Task:
+def ensure_local_track(path: str, cfg: Dict[str, Any],
+                       info: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    """取（没有就建）某本地文件对应的曲目记录
+
+    整理页里的「外来的」歌（从别处搜集来放进待整理目录的）在曲目库里没有记录，
+    要上传云盘 / 加歌单就得先给它建一条 —— 建完它才算进了曲目库。
+
+    另外补一道：老行**没有网易云 ID、但文件标签里现在有了**（用户后来在整理页
+    按 ID 匹配 / 刮削过）→ 补上。否则「加歌单」会因为没有正式曲目 id 而失败。
+    """
+    p = Path(str(path))
+    key = str(p)
+    db = SessionLocal()
+    try:
+        tr = db.query(Track).filter(Track.file_path == key).first()
+        created = False
+        if tr is None:
+            i = info if isinstance(info, dict) else organize.inspect(p)
+            sid = organize.read_netease_id(p)
+            tr = Track(platform="netease",
+                       platform_track_id=(sid if sid.isdigit() else ""),
+                       title=str(i.get("title") or p.stem),
+                       artist=str(i.get("artist") or ""),
+                       album=str(i.get("album") or ""),
+                       track_no=int(i.get("track") or 0),
+                       disc=int(i.get("disc") or 0),
+                       duration=float(i.get("duration") or 0),
+                       file_path=key, ext=p.suffix.lower().lstrip("."),
+                       size=int(i.get("size") or 0), status="ok", downloaded=True,
+                       selected=False, downloaded_at=_now())
+            db.add(tr)
+            db.commit()
+            created = True
+        elif not str(tr.platform_track_id or "").isdigit():
+            sid_now = organize.read_netease_id(p)     # 只在缺 ID 时才读标签，别每次都读
+            if sid_now.isdigit():
+                tr.platform_track_id = sid_now
+                db.commit()
+        return {"id": int(tr.id), "created": created, "title": tr.title or "",
+                "artist": tr.artist or "", "sid": str(tr.platform_track_id or "")}
+    finally:
+        db.close()
+
+
+def enqueue_upload_paths(cfg: Dict[str, Any], paths: List[str],
+                         pids: Optional[List[str]] = None,
+                         cloud_mode: str = "") -> Dict[str, Any]:
+    """把一批本地文件（整理页里的路径）排队上传云盘
+
+    pids 非空 = 「上传到云盘并加入歌单」：上传成功后自动把这歌加进这些歌单。
+    不判断歌曲在不在歌单里 —— 本地原有的歌本来就不一定在歌单里。
+    cloud_mode：「已经在云盘也想重传」时的处理（"again" 再传一份 / "replace" 先删旧的再传）。
+    """
+    to_pl = [str(x) for x in (pids or []) if str(x).strip()]
+    queued: List[Dict[str, Any]] = []
+    failed: List[Dict[str, str]] = []
+    for raw in paths:
+        key = str(raw)
+        try:
+            rec = ensure_local_track(key, cfg)
+        except Exception as e:  # noqa: BLE001
+            failed.append({"path": key, "error": f"{type(e).__name__}: {e}"})
+            continue
+        try:
+            enqueue_upload(int(rec["id"]), to_playlists=to_pl,
+                           force=True, cloud_mode=cloud_mode)   # 用户在上传页主动点的
+            queued.append({"path": key, "track_id": rec["id"],
+                           "title": rec["title"], "artist": rec["artist"]})
+        except Exception as e:  # noqa: BLE001
+            failed.append({"path": key, "error": f"{type(e).__name__}: {e}"})
+    return {"ok": True, "queued": len(queued), "count": len(queued),
+            "items": queued, "failed": failed, "playlists": len(to_pl)}
+
+
+def enqueue_upload(track_id: int, to_playlists: Optional[List[str]] = None,
+                   force: bool = False, cloud_mode: str = "") -> Task:
+    """把一首歌加入上传队列。
+
+    force=True 用于「用户主动点的上传」：若它正在失败退避等待中，直接取消等待立刻重排
+    （监控自动补传走默认 force=False，免得每轮都打断退避节奏）。
+    cloud_mode：「已经在云盘也想重传」时的处理 —— "again"=再传一份；"replace"=先删旧的再传。
+    """
     db = SessionLocal()
     try:
         tr = db.query(Track).filter_by(id=int(track_id)).first()
         if tr is None:
             raise LookupError("曲目不存在")
-        return UPLOADS.add(Task("upload", tr.id, title=tr.title or "",
-                                artist=tr.artist or "", album=tr.album or ""))
+        task = Task("upload", tr.id, title=tr.title or "",
+                    artist=tr.artist or "", album=tr.album or "")
+        if to_playlists:
+            task.to_playlists = [str(x) for x in to_playlists]
+        task.cloud_mode = str(cloud_mode or "")
+        out = UPLOADS.add(task, force_ready=force)
+        if task.cloud_mode:
+            out.cloud_mode = task.cloud_mode      # 队列里可能已有这首歌的任务，把模式补上
+        return out
     finally:
         db.close()
 

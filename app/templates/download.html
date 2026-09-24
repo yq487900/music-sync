@@ -25,7 +25,7 @@
     <button class="btn sm" id="btn-pause-all">全部暂停</button>
     <button class="btn sm" id="btn-resume-all">全部继续</button>
     <button class="btn sm" id="btn-cancel-all">全部取消</button>
-    <button class="btn sm" id="btn-clear">清空已结束</button>
+    <button class="btn sm danger" id="btn-clear">清空已结束</button>
   </div>
   <div id="queue"><div class="empty">当前没有下载任务</div></div>
 </div>
@@ -237,13 +237,16 @@ function renderQueue(q) {
       queued: '排队中', downloading: '下载中', paused: '已暂停',
       done: '已完成', failed: '失败', canceled: '已取消'
     }[t.state] || t.state;
+    // 失败退避中的任务：显示还有几秒重试（它不占队列，后面的歌照常跑）
+    const wait = (t.state === 'queued' && t.retry_in > 0)
+      ? ('（' + t.retry_in + 's 后重试）') : '';
     return `
       <div class="trk" data-tid="${t.track_id}">
         <span class="no"></span>
         ${phBox(t.state === 'done' ? 'ic-check' : (t.state === 'failed' ? 'ic-warn' : 'ic-down'))}
         <span class="meta">
           <strong>${esc(t.title || '未知曲目')}</strong>
-          <span>${esc(t.artist || '')} · ${state}
+          <span>${esc(t.artist || '')} · ${state}${wait}
             ${t.level ? ' · 音质 ' + esc(t.level) : ''}
             ${t.source ? ' · 音源 ' + esc(t.source) : ''}
             ${t.total ? ' · ' + fmtSize(t.done) + ' / ' + fmtSize(t.total) + '（' + t.percent + '%）'
@@ -252,6 +255,8 @@ function renderQueue(q) {
             ? `<div class="bar" style="margin-top:6px"><i style="width:${t.total ? t.percent : 0}%"></i></div>`
             : ''}
           ${t.error ? `<span style="color:var(--err)">${esc(t.error)}</span>` : ''}
+          ${(t.state === 'queued' && t.retry_note)
+            ? `<span class="hint">${esc(t.retry_note)}</span>` : ''}
         </span>
         <span class="right">
           ${t.state === 'failed'

@@ -9,7 +9,10 @@ services:
       - "${APP_PORT:-13570}:13570"
     volumes:
       - musicsync_data:/data
-      - ${MUSIC_DIR:-/mnt/music}:/music
+      # 三个音乐目录各自独立映射（详见 docker-compose.yml 里的说明）
+      - ${MUSIC_DOWNLOAD_DIR:-/mnt/music/download}:/music/download
+      - ${MUSIC_LIBRARY_DIR:-/mnt/music/musics}:/music/musics
+      - ${MUSIC_TRASH_DIR:-/mnt/music/_trash}:/music/_trash
     environment:
       - TZ=Asia/Shanghai
     restart: unless-stopped

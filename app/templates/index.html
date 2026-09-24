@@ -128,7 +128,12 @@ async function loadHome() {
     document.getElementById('login-hint').hidden = true;
     setV('a-name', a.nickname || '（未取到昵称）');
     const ava = document.getElementById('a-ava');
-    if (a.avatar) { ava.src = a.avatar; ava.referrerPolicy = 'no-referrer'; } else { ava.hidden = true; }
+    if (a.avatar) {
+      // 头像也是网易云的 http CDN 图，手机端同样容易破图 → 走本机代理，失败就藏起来
+      ava.onerror = () => { ava.onerror = null; ava.hidden = true; };
+      ava.src = coverUrl(a.avatar);
+      ava.referrerPolicy = 'no-referrer';
+    } else { ava.hidden = true; }
     const meta = [];
     if (a.uid) meta.push(`UID ${a.uid}`);
     if (a.level) meta.push(`Lv.${a.level}${a.play_count ? ` · 听过 ${a.play_count} 首` : ''}`);

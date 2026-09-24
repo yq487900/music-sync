@@ -7,8 +7,13 @@ services:
       - "${APP_PORT:-13570}:13570"
     volumes:
       - musicsync_data:/data
-      # 音乐下载目录
-      - ${MUSIC_DIR:-/mnt/music}:/music
+      # ---- 音乐目录：三个目录各自独立映射到宿主机真实路径（互不包含，别套在一起）----
+      # 待整理：歌单下载 / 云盘下载 / 第三方搜集来的 / 本地原有的歌
+      - ${MUSIC_DOWNLOAD_DIR:-/mnt/music/download}:/music/download
+      # 整理后曲库：补齐标签/封面/歌词/专辑后的成品
+      - ${MUSIC_LIBRARY_DIR:-/mnt/music/musics}:/music/musics
+      # 回收站：整理页删掉的歌（可找回）
+      - ${MUSIC_TRASH_DIR:-/mnt/music/_trash}:/music/_trash
     environment:
       - TZ=Asia/Shanghai
     restart: unless-stopped

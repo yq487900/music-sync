@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>{% block title %}MusicSync{% endblock %}</title>
-<link rel="stylesheet" href="/static/style.css?v=30">
+<link rel="stylesheet" href="/static/style.css?v=37">
 <meta name="theme-color" content="#0b0f1f">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
@@ -126,6 +126,19 @@
     <path fill="currentColor" d="M6.8 18.6h9.9a4 4 0 0 0 .3-8 5.5 5.5 0 0 0-10.5-1.1A4.1 4.1 0 0 0 6.8 18.6Z"/>
     <path fill="none" stroke="#fff" stroke-width="2.6" stroke-linecap="round"
           stroke-linejoin="round" d="M12 11.7v3.4M12 17.5h.01"/>
+  </symbol>
+  <!-- 不在云盘 + 可以上传：云朵中间一个向上箭头（整理页专用；尺寸/对齐与其它状态图标一致） -->
+  <symbol id="ic-cloud-up" viewBox="0 0 24 24">
+    <path fill="currentColor" d="M6.8 18.6h9.9a4 4 0 0 0 .3-8 5.5 5.5 0 0 0-10.5-1.1A4.1 4.1 0 0 0 6.8 18.6Z"/>
+    <path fill="none" stroke="#fff" stroke-width="2.4" stroke-linecap="round"
+          stroke-linejoin="round" d="M12 16.9v-5.5M9.6 13.7 12 11.3l2.4 2.4"/>
+  </symbol>
+  <!-- 云盘里有个同名条目、但不一定是这个版本：云朵中间一个问号（仍可点上传） -->
+  <symbol id="ic-cloud-question" viewBox="0 0 24 24">
+    <path fill="currentColor" d="M6.8 18.6h9.9a4 4 0 0 0 .3-8 5.5 5.5 0 0 0-10.5-1.1A4.1 4.1 0 0 0 6.8 18.6Z"/>
+    <path fill="none" stroke="#fff" stroke-width="2.1" stroke-linecap="round"
+          stroke-linejoin="round"
+          d="M10.7 12.3c0-1.1.8-1.9 1.8-1.9s1.8.7 1.8 1.7c0 .9-.6 1.3-1.2 1.6-.5.3-.9.6-.9 1.2v.3M12.3 17.4h.01"/>
   </symbol>
 
   <!-- 无封面时的占位小音符 -->
@@ -349,6 +362,58 @@ function confirmBox(title, msg, okText, danger) {
   });
 }
 
+/** 封面 URL → 本地代理：网易云 CDN 给的是 http 直链，手机端经常加载不出来
+ *  （系统「始终使用安全连接」、代理规则、防盗链都会中招）显示成破图/问号，
+ *  这里统一交给 NAS 服务端取图并缓存，页面只连本机。本地接口(/开头)与 data: 原样返回。 */
+function coverUrl(u) {
+  u = String(u || '').trim();
+  if (!u) return '';
+  if (u.startsWith('/') || u.startsWith('data:')) return u;
+  return '/img?u=' + encodeURIComponent(u);
+}
+
+/** 图片加载失败 → 换成统一占位块（别再出现手机端那种破图/问号） */
+function covFail(img) {
+  img.onerror = null;
+  const cls = img.className || 'cov';
+  const sp = document.createElement('span');
+  sp.className = cls.indexOf('ph') < 0 ? (cls + ' ph') : cls;
+  sp.innerHTML = '<svg class="ci-ph"><use href="#ic-no-cover"/></svg>';
+  img.replaceWith(sp);
+}
+
+/** 大封面（编辑面板）加载失败 → 换成一行提示，别撑坏那个 148px 的框 */
+function covFailBig(img) {
+  img.onerror = null;
+  const sp = document.createElement('span');
+  sp.className = 'hint';
+  sp.textContent = '封面加载失败';
+  img.replaceWith(sp);
+}
+
+/** 复制网易云歌曲 ID（歌单页 / 云盘页 / 整理页的 .sid-tag 点击触发）——
+    手动匹配（云盘页「编辑 → 按 ID 匹配」）时直接粘贴用 */
+function copySid(el) {
+  const sid = String(el.dataset.sid || '');
+  if (!sid) return;
+  const done = () => toast('已复制网易云 ID：' + sid, 'ok');
+  if (navigator.clipboard && navigator.clipboard.writeText) {
+    navigator.clipboard.writeText(sid).then(done, () => fallbackCopy(sid, done));
+  } else {
+    fallbackCopy(sid, done);
+  }
+}
+function fallbackCopy(text, done) {
+  const ta = document.createElement('textarea');
+  ta.value = text;
+  ta.style.position = 'fixed';
+  ta.style.opacity = '0';
+  document.body.appendChild(ta);
+  ta.select();
+  try { document.execCommand('copy'); done(); } catch (e) { toast('复制失败，请手动选择', 'err'); }
+  ta.remove();
+}
+
 /** 没有封面时的占位块（内联 SVG，不用 emoji）；cls 默认 cov，歌单头图那里传 cover */
 function phBox(icon, tip, cls) {
   const c = cls || 'cov';
@@ -468,6 +533,9 @@ const LEGEND = [
   ['ci-in', 'ic-cloud', '在云盘', '已上传到网易云云盘（本地可能还没下载）'],
   ['ci-in', 'ic-cloud-check', '在云盘且本地也有', '既在云盘，本地也已经下载好'],
   ['ci-out', 'ic-cloud-alert', '不在云盘', '云盘里还没有这首歌 —— 点一下可以立即下载并转存'],
+  ['ci-out', 'ic-cloud-up', '不在云盘（可上传）', '整理页：这首歌还不在云盘，点一下可以直接上传到云盘（外来的本地歌也能传）'],
+  ['ci-maybe', 'ic-cloud-question', '可能有同名（可上传）', '整理页：云盘里有个同名条目，但不一定是这个版本（可能只是歌名/歌手撞上了）—— 点一下仍可再传一份'],
+  ['ci-in', 'ic-cloud-check', '在云盘（可重新上传）', '整理页：点一下可以重新上传 —— 改过标签/封面或换了文件之后用它重传（可选替换云盘上原条目）'],
   ['ci-list', 'ic-list', '在歌单里', '这首歌在你的（已勾选的）歌单里'],
   ['ci-list-out', 'ic-list-out', '不在歌单', '不在任何歌单里 —— 点一下可加到歌单'],
   ['ci-unknown', 'ic-cloud', '判断不了', '云盘条目还没匹配到正式曲目，认不出是哪首歌'],

@@ -39,8 +39,21 @@
 
   <form id="cfg-form">
     <div class="field">
-      <label for="download_dir">下载目录</label>
-      <input type="text" id="download_dir" name="download_dir" value="{{ cfg.download_dir }}" placeholder="/music">
+      <label for="download_dir">待整理目录（下载 / 本地原有的歌都放这儿）</label>
+      <input type="text" id="download_dir" name="download_dir" value="{{ cfg.download_dir }}" placeholder="/music/download">
+    </div>
+
+    <div class="field">
+      <label for="library_dir">整理后曲库目录</label>
+      <input type="text" id="library_dir" name="library_dir" value="{{ cfg.library_dir }}" placeholder="/music/musics">
+    </div>
+
+    <div class="field">
+      <label for="trash_dir">回收站目录</label>
+      <input type="text" id="trash_dir" name="trash_dir" value="{{ cfg.trash_dir }}" placeholder="/music/_trash">
+      <p class="hint" style="margin-top:8px">这三个目录可以在 <span class="mono">docker-compose.yml</span>
+        里各自映射到宿主机真实路径（<span class="mono">MUSIC_DOWNLOAD_DIR</span> /
+        <span class="mono">MUSIC_LIBRARY_DIR</span> / <span class="mono">MUSIC_TRASH_DIR</span>）。</p>
     </div>
 
     <div class="field">
@@ -59,6 +72,15 @@
       <p class="hint" style="margin-top:8px">可用变量：<span class="mono">{track}</span>
         <span class="mono">{pos}</span> <span class="mono">{title}</span>
         <span class="mono">{artist}</span> <span class="mono">{album}</span></p>
+    </div>
+
+    <div class="field">
+      <label>下载后自动归档</label>
+      <label class="switch">
+        <input type="checkbox" name="auto_archive" {% if cfg.library.auto_archive %}checked{% endif %}>
+        <span class="track"></span>
+        <span class="lbl">元数据齐全就自动进整理后<em>下载自带官方 歌名 / 歌手 / 专辑 / 封面 / 歌词 + 网易云 ID 时，直接移进「整理后」，不用再手动刮削；缺任一项的仍留在「待整理」</em></span>
+      </label>
     </div>
 
     <div class="field">
@@ -86,10 +108,22 @@
         <span class="lbl">下载完成后自动上传云盘<em>下载成功即刻排队上传</em></span>
       </label>
       <label class="switch">
-        <input type="checkbox" name="calibrate" {% if cfg.cloud.calibrate %}checked{% endif %}>
+        <input type="checkbox" name="delete_local_after_upload" {% if cfg.cloud.delete_local_after_upload %}checked{% endif %}>
         <span class="track"></span>
-        <span class="lbl">上传后自动校准<em>以歌单里的官方信息为准，核对并纠正本地歌名 / 歌手 / 专辑 / 封面 / 歌词</em></span>
+        <span class="lbl">上传云盘后删除本地<em>手动或自动上传成功后，把本地文件连同封面/歌词/NFO 一起移进回收站；关闭则本地不动</em></span>
       </label>
+      <div class="field" style="max-width:520px">
+        <label for="calibrate_mode">上传后自动校准</label>
+        <select id="calibrate_mode" name="calibrate_mode">
+          <option value="fill" {% if (cfg.cloud.calibrate_mode or 'fill') == 'fill' %}selected{% endif %}>只补空：本地缺的才补，你整理好的元数据一律不动（推荐）</option>
+          <option value="full" {% if cfg.cloud.calibrate_mode == 'full' %}selected{% endif %}>全量纠正：按网易云官方信息核对并覆盖本地歌名 / 歌手 / 专辑 / 封面 / 歌词</option>
+          <option value="off" {% if cfg.cloud.calibrate_mode == 'off' %}selected{% endif %}>关闭：一个字节都不动本地文件</option>
+        </select>
+        <span class="hint">只影响<b>本地文件</b>。不管选哪一档，上传后都会把云盘条目匹配到网易云的正式曲目
+          —— 不然云盘上这张没有封面、也显示不成正式曲目。<br>
+          「只补空」= 你改好的歌名/歌手/专辑/封面/歌词保留，只有缺的（比如没封面、没歌词）才从官方补上；
+          想让它彻底不碰文件就选「关闭」。</span>
+      </div>
       <label class="switch">
         <input type="checkbox" name="monitor_on" {% if cfg.monitor.on %}checked{% endif %}>
         <span class="track"></span>
@@ -319,6 +353,7 @@ function readCfgForm(f) {
     download_dir: f.download_dir.value,
     layout: f.layout.value,
     naming: f.naming.value,
+    auto_archive: chk('auto_archive'),
     chain: f.chain.value,
     upgrade_existing: chk('upgrade_existing'),
     lrc: chk('lrc'), embed: chk('embed'), nfo: chk('nfo'),
@@ -329,7 +364,8 @@ function readCfgForm(f) {
     backoff_hours: num('backoff_hours', 24),
     auto_sync: chk('auto_sync'), auto_download: chk('auto_download'),
     auto_upload: chk('auto_upload'),
-    calibrate: chk('calibrate'),
+    delete_local_after_upload: chk('delete_local_after_upload'),
+    calibrate_mode: (f.calibrate_mode ? f.calibrate_mode.value : 'fill'),
     monitor_on: chk('monitor_on'),
     monitor_mode: f.monitor_mode.value,
     monitor_batch: num('monitor_batch', 20),
@@ -440,7 +476,7 @@ function srcRow(s) {
           <button class="btn mini" data-act="check">检测</button>
           ${s.url ? '<button class="btn mini" data-act="update">更新</button>' : ''}
           <button class="btn mini" data-act="edit">编辑</button>
-          <button class="btn mini" data-act="del">删除</button>
+          <button class="btn mini danger" data-act="del">删除</button>
         </span>
       </div>
       <div class="src-edit" hidden></div>

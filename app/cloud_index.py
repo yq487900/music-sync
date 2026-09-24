@@ -58,7 +58,14 @@ class CloudIndex:
         self.entry_ids: Set[str] = set()      # 所有条目自带的 id（用来核对本地记的云盘 id 还在不在）
         self.keys: Set[str] = set()           # 未匹配条目：标题|首个歌手
         self.titles: Set[str] = set()         # 未匹配条目：标题（歌手写法对不上时兜底）
+        # 文件 md5 → 云盘条目（按内容认「这份文件在不在云盘」，最硬的证据；
+        # 从 items 重建，不额外落盘）
+        self.md5_item: Dict[str, Dict[str, Any]] = {}
         self.items: List[Dict[str, Any]] = []  # 全量条目（云盘页列表/搜索/筛选用，省得每次翻接口）
+        # 全量条目的「标题|歌手」索引（懒构建，见 has_song）；只给整理页判断「在不在云盘」用
+        self._all_keys: Set[str] = set()
+        self._all_titles: Set[str] = set()
+        self._all_at: float = -1.0
         self._lock = asyncio.Lock()
         self._task: Optional[asyncio.Task] = None
         self._failed: float = 0.0             # 上次拉取失败的时间（失败后 1 分钟内不再重试）
@@ -80,6 +87,8 @@ class CloudIndex:
         self.titles = {str(x) for x in (data.get("titles") or [])}
         items = data.get("items")
         self.items = items if isinstance(items, list) else []
+        self._rebuild_md5()
+
 
     def _save_disk(self) -> None:
         payload = {"at": self.at, "count": self.count,
@@ -135,6 +144,63 @@ class CloudIndex:
         if len(name) >= 5 and name in self.titles:
             return True
         return False
+
+    # ---------------- 拉取 ----------------
+    def _all_index(self):
+        """全量条目（含已匹配到正式曲目的）的「标题|歌手」索引，按需构建一次
+
+        _rebuild / note_upload 会把 self.at 变掉，这里靠它判断要不要重建。
+        """
+        if self._all_at == self.at and (self._all_keys or not self.items):
+            return self._all_keys, self._all_titles
+        keys: Set[str] = set()
+        titles: Set[str] = set()
+        for x in self.items:
+            raw = x.get("title")
+            base = _base_title(raw)
+            if not base:
+                continue
+            ar = _first_artist(x.get("artist"))
+            keys.add(f"{base}|{ar}")
+            keys.add(f"{_norm(raw)}|{ar}")
+            titles.add(base)
+        self._all_keys, self._all_titles, self._all_at = keys, titles, self.at
+        return keys, titles
+
+    def has_song(self, title: Any, artist: Any = "") -> bool:
+        """按「歌名 / 歌手」判断这首歌在不在云盘（含已匹配到正式曲目的条目）
+
+        与 lookup() 的分工：lookup 对「已匹配」条目只认 sid（精确，歌单页 / 云盘页用）；
+        本地文件（尤其是从别处搜集来的）只有标签、没有 sid，整理页要用这个方法，
+        否则明明云盘里有（别的工具传上去的），也会显示成「不在云盘」、点一下又传一份。
+        """
+        if not self.ready:
+            return False
+        name = _base_title(title)
+        if not name:
+            return False
+        keys, titles = self._all_index()
+        ar = _first_artist(artist)
+        if ar and (f"{name}|{ar}" in keys or f"{_norm(title)}|{ar}" in keys):
+            return True
+        # 歌手写法常有出入（feat. / 多歌手 / 别名），歌名够长时只比歌名
+        return len(name) >= 5 and name in titles
+
+    def _rebuild_md5(self) -> None:
+        """从 items 重建「md5 → 云盘条目」（按文件内容认在不在云盘，最硬的证据）"""
+        m: Dict[str, Dict[str, Any]] = {}
+        for x in self.items:
+            h = str(x.get("md5") or "").lower()
+            if h and h not in m:
+                m[h] = x
+        self.md5_item = m
+
+    def find_by_md5(self, md5: Any) -> Optional[Dict[str, Any]]:
+        """按本地文件 md5 找云盘上的同一个文件（找不到 / 索引没建好 → None）"""
+        h = str(md5 or "").lower()
+        if len(h) != 32:
+            return None
+        return self.md5_item.get(h)
 
     # ---------------- 拉取 ----------------
     async def _fetch(self, cookie: str) -> List[Dict[str, Any]]:
@@ -194,6 +260,7 @@ class CloudIndex:
         self.items = items                    # 云盘页直接用这份，不再逐页拉接口
         self.count = len(items)
         self.at = time.time()
+        self._rebuild_md5()
 
     async def refresh(self, cookie: str) -> Dict[str, Any]:
         """拉全量云盘并重建索引（同一时间只跑一次）"""
@@ -237,6 +304,8 @@ class CloudIndex:
             self.keys.add(f"{base}|{ar}")
             self.keys.add(f"{_norm(title)}|{ar}")
             self.titles.add(base)
+            # 让 has_song 的全量索引下次重建（新传上去的歌马上就能被整理页认出来）
+            self._all_at = -1.0
         self._save_disk()
 
     def ensure_async(self, cookie: str, force: bool = False) -> None:

@@ -11,10 +11,12 @@
 from __future__ import annotations
 
 import base64
+import hashlib
 import json
 import os
 import re
 import shutil
+import threading
 import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -28,7 +30,33 @@ from app.tagger import tag_file
 
 AUDIO_EXT = {".flac", ".mp3", ".m4a", ".wav", ".ape", ".ogg", ".opus"}
 CACHE_PATH = Path("/data/organize_scan.json")
-TRASH_DIR = Path("/data/_trash")
+
+
+def _trash_dir() -> Path:
+    return Path(str(config.load().get("trash_dir") or "/music/_trash"))
+
+
+def trash_root() -> Path:
+    """回收站根目录（配置里的 trash_dir，默认 /music/_trash）"""
+    return _trash_dir()
+
+
+def music_base(cfg: Optional[Dict[str, Any]] = None) -> Path:
+    """download / musics 的共同父目录（通常就是 /music）。
+
+    回收站里按「相对这个目录」的路径存文件，恢复/彻底删除时才知道它原本在
+    待整理目录还是整理后目录 —— 如果只按 download_dir 存，整理后的歌恢复回来会跑错地方。
+    """
+    c = cfg if isinstance(cfg, dict) else config.load()
+    dl = Path(str(c.get("download_dir") or "/music/download"))
+    lib = Path(str(c.get("library_dir") or "/music/musics"))
+    try:
+        if dl.resolve().parent == lib.resolve().parent:
+            return dl.resolve().parent
+    except OSError:
+        pass
+    return dl
+
 
 # 版本噪声词：命中则降权（让原唱排在翻唱前面）
 NOISE_RE = re.compile(
@@ -195,30 +223,113 @@ def save_cache(files: Dict[str, Any]) -> None:
         pass
 
 
+# ---------------------------------------------------------------- 文件 md5（云盘一致性校准）
+HASH_PATH = Path("/data/file_hash.json")
+_hash_lock = threading.Lock()
+
+
+def load_hash_cache() -> Dict[str, Any]:
+    try:
+        return json.loads(HASH_PATH.read_text(encoding="utf-8")).get("files") or {}
+    except Exception:  # noqa: BLE001
+        return {}
+
+
+def _save_hash_cache(files: Dict[str, Any]) -> None:
+    try:
+        HASH_PATH.parent.mkdir(parents=True, exist_ok=True)
+        HASH_PATH.write_text(
+            json.dumps({"at": time.strftime("%Y-%m-%d %H:%M:%S"), "files": files},
+                       ensure_ascii=False),
+            encoding="utf-8")
+    except Exception:  # noqa: BLE001
+        pass
+
+
+def file_md5(path: Any, refresh: bool = False) -> str:
+    """本地文件 md5（带缓存：大小 + 修改时间没变就直接用缓存结果）
+
+    一首 30~80MB 的 flac 算一次约 0.1~0.3s，所以**不能**每次列列表都重算；
+    缓存以 (size, mtime) 为键，文件被重新整理/替换后会自动重算。
+    与云盘条目的 privateCloud.md5 是同一口径（都是原文件字节的 md5，实测一致）。
+    """
+    p = Path(str(path))
+    try:
+        st = p.stat()
+    except OSError:
+        return ""
+    size, mtime = int(st.st_size), int(st.st_mtime)
+    with _hash_lock:
+        cache = load_hash_cache()
+    ent = cache.get(str(p))
+    if (not refresh and isinstance(ent, dict)
+            and int(ent.get("size") or -1) == size and int(ent.get("mtime") or -1) == mtime
+            and ent.get("md5")):
+        return str(ent["md5"])
+    h = hashlib.md5()
+    try:
+        with open(p, "rb") as fh:
+            for chunk in iter(lambda: fh.read(1024 * 1024), b""):
+                h.update(chunk)
+    except OSError:
+        return ""
+    md5 = h.hexdigest()
+    with _hash_lock:
+        cache = load_hash_cache()          # 重新读一次，避免覆盖别人刚写的结果
+        cache[str(p)] = {"size": size, "mtime": mtime, "md5": md5}
+        _save_hash_cache(cache)
+    return md5
+
+
+def md5_state(path: Any) -> Optional[str]:
+    """缓存里已有的 md5（不触发计算）—— 列表接口用，避免请求变慢"""
+    try:
+        st = Path(str(path)).stat()
+    except OSError:
+        return None
+    ent = load_hash_cache().get(str(path))
+    if (isinstance(ent, dict) and int(ent.get("size") or -1) == int(st.st_size)
+            and int(ent.get("mtime") or -1) == int(st.st_mtime) and ent.get("md5")):
+        return str(ent["md5"])
+    return None
+
+
+def forget_md5(path: Any) -> None:
+    """让某个文件的 md5 缓存失效（文件被改动后调用）"""
+    with _hash_lock:
+        cache = load_hash_cache()
+        if cache.pop(str(path), None) is not None:
+            _save_hash_cache(cache)
+
+
 def scan_music(refresh: bool = False, limit: int = 0) -> Dict[str, Any]:
-    """扫描音乐库；用「大小 + 修改时间」做增量，没变的文件不重复读标签"""
+    """扫描音乐库（download 待整理 + musics 整理后两个目录）；用「大小 + 修改时间」做增量"""
     cfg = config.load()
-    root = str(cfg.get("download_dir") or "/music")
+    dl_root = str(cfg.get("download_dir") or "/music/download")
+    lib_root = str(cfg.get("library_dir") or "/music/musics")
     cache = load_cache()
     out: Dict[str, Any] = {}
     changed = 0
-    for p in walk_audio(root, limit):
-        key = str(p)
-        try:
-            st = p.stat()
-        except OSError:
-            continue
-        sig = [st.st_size, int(st.st_mtime)]
-        old = cache.get(key)
-        if old and not refresh and old.get("_sig") == sig:
-            out[key] = old
-            continue
-        info = inspect(p)
-        info["_sig"] = sig
-        out[key] = info
-        changed += 1
+    for section, root in (("download", dl_root), ("musics", lib_root)):
+        for p in walk_audio(root, limit):
+            key = str(p)
+            try:
+                st = p.stat()
+            except OSError:
+                continue
+            sig = [st.st_size, int(st.st_mtime)]
+            old = cache.get(key)
+            if old and not refresh and old.get("_sig") == sig:
+                old["section"] = section
+                out[key] = old
+                continue
+            info = inspect(p)
+            info["_sig"] = sig
+            info["section"] = section
+            out[key] = info
+            changed += 1
     save_cache(out)
-    return {"root": root, "total": len(out), "changed": changed, "files": out}
+    return {"root": lib_root, "total": len(out), "changed": changed, "files": out}
 
 
 def drop_cache_entry(path: str) -> None:
@@ -228,6 +339,37 @@ def drop_cache_entry(path: str) -> None:
     if entry is not None:
         entry.pop("_sig", None)
         save_cache(cache)
+
+
+def read_netease_id(path: Path) -> str:
+    """读标签里记着的网易云歌曲 id（本工具刮削时写进去的 sid）
+
+    「外来的」本地歌没有曲目记录，但如果是本工具刮削过的，标签里有这个 id，
+    上传到云盘后就能直接匹配到正式曲目、进而加入歌单。
+    """
+    ext = path.suffix.lower()
+    try:
+        if ext == ".flac":
+            from mutagen.flac import FLAC
+            v = FLAC(str(path)).get("netease_id") or []
+            return str(v[0]).strip() if v else ""
+        if ext == ".mp3":
+            from mutagen.id3 import ID3, ID3NoHeaderError
+            try:
+                frames = ID3(str(path)).getall("TXXX")
+            except ID3NoHeaderError:
+                return ""
+            for f in frames:
+                if str(getattr(f, "desc", "")).upper() == "NETEASE_ID" and f.text:
+                    return str(f.text[0]).strip()
+            return ""
+        if ext in (".m4a", ".mp4"):
+            from mutagen.mp4 import MP4
+            v = MP4(str(path)).get("----:com.apple.iTunes:NETEASE_ID") or []
+            return bytes(v[0]).decode("utf-8", "ignore").strip() if v else ""
+    except Exception:  # noqa: BLE001  读不动就当没有
+        return ""
+    return ""
 
 
 def audit(files: Dict[str, Any]) -> Dict[str, int]:
@@ -247,20 +389,27 @@ def has_tag(f: Dict[str, Any]) -> bool:
 
 
 def _facet_ok(f: Dict[str, Any], filters: Dict[str, str], key: str, has: bool) -> bool:
-    """筛选片的一档：yes=只看有，no=只看缺，其它（all/空）不筛"""
+    """筛选片的一档：yes=只看有，no=只看缺，其它（all/空）不筛
+
+    云盘这一档沿用了站内其它页面的取值：in=在云盘 / out=不在云盘。
+    """
     v = str((filters or {}).get(key) or "all")
-    if v == "yes":
+    if v in ("yes", "in"):
         return has
-    if v == "no":
+    if v in ("no", "out"):
         return not has
     return True
 
 
 def list_items(files: Dict[str, Any], keyword: str = "", page: int = 1,
-               size: int = 20, filters: Optional[Dict[str, str]] = None) -> Dict[str, Any]:
+               size: int = 20, filters: Optional[Dict[str, str]] = None,
+               cloud_paths: Optional[Any] = None,
+               delisted_paths: Optional[Any] = None) -> Dict[str, Any]:
     """列表化 + 搜索 + 筛选 + 分页（按 歌手/专辑/文件名 排序）
 
-    筛选（filters；缺省或 "all" = 不筛）：tag / cover / lyric 各取 yes|no。
+    筛选（filters；缺省或 "all" = 不筛）：tag / cover / lyric 各取 yes|no；
+    cloud 取 all|in|out（在不在云盘，需同时传 cloud_paths，否则不作筛选）；
+    delisted 取 all|yes|no（已下架，需同时传 delisted_paths）。
     返回里的 counts 是先按关键词过滤、再统计的各档数量，供筛选片显示数字。
     """
     rows = list(files.values())
@@ -271,17 +420,27 @@ def list_items(files: Dict[str, Any], keyword: str = "", page: int = 1,
                 or kw in (r.get("artist") or "").lower()
                 or kw in (r.get("album") or "").lower()
                 or kw in (r.get("name") or "").lower()]
+    has_cloud = cloud_paths is not None
+    in_cloud = lambda r: bool(has_cloud and str(r.get("path")) in cloud_paths)   # noqa: E731
+    has_del = delisted_paths is not None
+    is_delisted = lambda r: bool(has_del and str(r.get("path")) in delisted_paths)  # noqa: E731
     n_tag = sum(1 for r in rows if has_tag(r))
     n_cov = sum(1 for r in rows if r.get("has_cover"))
     n_lyr = sum(1 for r in rows if r.get("has_lyrics"))
+    n_cld = sum(1 for r in rows if in_cloud(r)) if has_cloud else 0
+    n_del = sum(1 for r in rows if is_delisted(r)) if has_del else 0
     counts = {"total": len(rows),
               "tag_yes": n_tag, "tag_no": len(rows) - n_tag,
               "cover_yes": n_cov, "cover_no": len(rows) - n_cov,
-              "lyric_yes": n_lyr, "lyric_no": len(rows) - n_lyr}
+              "lyric_yes": n_lyr, "lyric_no": len(rows) - n_lyr,
+              "cloud_in": n_cld, "cloud_out": len(rows) - n_cld,
+              "delisted_yes": n_del, "delisted_no": len(rows) - n_del}
     rows = [r for r in rows
             if _facet_ok(r, filters, "tag", has_tag(r))
             and _facet_ok(r, filters, "cover", bool(r.get("has_cover")))
-            and _facet_ok(r, filters, "lyric", bool(r.get("has_lyrics")))]
+            and _facet_ok(r, filters, "lyric", bool(r.get("has_lyrics")))
+            and (not has_cloud or _facet_ok(r, filters, "cloud", in_cloud(r)))
+            and (not has_del or _facet_ok(r, filters, "delisted", is_delisted(r)))]
     rows.sort(key=lambda r: ((r.get("artist") or "zzz"), (r.get("album") or ""),
                              (r.get("track") or 0), (r.get("name") or "")))
     total = len(rows)
@@ -620,6 +779,63 @@ async def fetch_song(cfg: Dict[str, Any], sid: str, with_lyric: bool = True) -> 
 
 
 # ------------------------------------------------------------------ 刮削
+def is_meta_complete(path: Path) -> bool:
+    """这首歌的元数据是否已经齐全，不用再刮削就能直接进整理后曲库：
+
+    有 歌名 + 歌手 + 专辑 + 封面 + 歌词，且标签里带着网易云歌曲 id（= 跟歌单/官方对得上）。
+    下载器下载时本来就会写入官方 meta + 封面 + 歌词 + netease_id，所以「下载自带的
+    就是齐全的官方元数据」时，这里返回 True，可以直接归档，省掉一次手动刮削。
+    """
+    try:
+        if not path.exists():
+            return False
+        info = inspect(path)
+        sid = read_netease_id(path)
+        return bool(info["title"] and info["artist"] and info["album"]
+                    and info["has_cover"] and info["has_lyrics"]
+                    and sid.isdigit())
+    except Exception:  # noqa: BLE001  读不动就当不齐全
+        return False
+
+
+def move_into_library(path: Path, cfg: Dict[str, Any]) -> Optional[str]:
+    """把待整理目录（download）里的歌移到整理后曲库（musics），保持相对路径不变。
+
+    返回移动后的目标路径；不在 download 目录里 / 移动失败返回 None。
+    """
+    lib_root = Path(str(cfg.get("library_dir") or "/music/musics")).resolve()
+    dl_root = Path(str(cfg.get("download_dir") or "/music/download")).resolve()
+    try:
+        p_res = path.resolve()
+    except OSError:
+        p_res = path
+    try:
+        in_download = p_res.is_relative_to(dl_root)
+    except (ValueError, OSError):
+        in_download = False
+    if not in_download:
+        return None
+    try:
+        rel = p_res.relative_to(dl_root)
+    except ValueError:
+        rel = Path(path.name)
+    dest = lib_root / rel
+    try:
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        if not dest.exists():
+            shutil.move(str(path), str(dest))
+            for side in (".lrc", ".nfo"):
+                s = path.with_suffix(side)
+                if s.exists():
+                    shutil.move(str(s), str(dest.with_suffix(side)))
+            # 归档后待整理侧残留的空目录（专辑 / 歌手目录）一并清掉，下次下载会自动重建
+            _remove_empty_dirs_upward(path.parent, dl_root)
+            return str(dest)
+    except OSError:
+        pass
+    return None
+
+
 async def scrape_file(cfg: Dict[str, Any], path: Path, song_id: str = "",
                       keyword: str = "", dry_run: bool = False) -> Dict[str, Any]:
     """刮削一个文件：按 ID 或按关键词匹配 → 写标签 + 封面 + 歌词。
@@ -701,6 +917,10 @@ async def scrape_file(cfg: Dict[str, Any], path: Path, song_id: str = "",
     if not written.get("ok"):
         return {"ok": False,
                 "reason": written.get("error") or written.get("warning") or "写入失败"}
+    # 刮削完成 → 把 download 目录的文件移进 musics（整理后曲库）
+    dest = move_into_library(path, cfg)
+    if dest:
+        res["moved_to"] = dest
     return res
 
 
@@ -708,16 +928,16 @@ async def scrape_file(cfg: Dict[str, Any], path: Path, song_id: str = "",
 def _trash_batch(path: Path) -> Path:
     """一条回收站文件所属的批次目录（/data/_trash/<时间戳>）"""
     try:
-        return TRASH_DIR / path.relative_to(TRASH_DIR).parts[0]
+        return _trash_dir() / path.relative_to(_trash_dir()).parts[0]
     except (ValueError, IndexError):
         return path.parent
 
 
 def _trash_tidy() -> None:
     """清掉空的批次目录"""
-    if not TRASH_DIR.exists():
+    if not _trash_dir().exists():
         return
-    for batch in list(TRASH_DIR.iterdir()):
+    for batch in list(_trash_dir().iterdir()):
         if batch.is_dir() and not any(batch.rglob("*")):
             try:
                 batch.rmdir()
@@ -725,12 +945,48 @@ def _trash_tidy() -> None:
                 pass
 
 
+def _remove_empty_dirs_upward(start: Path, stop: Path) -> None:
+    """从 start 向上逐层删掉空目录，直到 stop（stop 本身不删）。
+
+    删除 / 移走歌曲后，残留的空「专辑目录 / 歌手目录」由这里连带清掉；
+    这些目录在下次下载或整理时会被 mkdir(parents=True) 自动重建，
+    不会出现找不到目录的情况。
+    """
+    try:
+        stop_res = stop.resolve()
+    except OSError:
+        return
+    cur = Path(start)
+    for _ in range(32):                        # 最多向上 32 层，防死循环
+        try:
+            cur_res = cur.resolve()
+        except OSError:
+            return
+        if cur_res == stop_res:
+            return
+        try:
+            if not cur_res.is_relative_to(stop_res):
+                return
+        except ValueError:
+            return
+        try:
+            if not cur_res.is_dir() or any(cur_res.iterdir()):
+                return
+        except OSError:
+            return
+        try:
+            cur_res.rmdir()
+        except OSError:
+            return
+        cur = cur_res.parent
+
+
 def trash_items() -> List[Dict[str, Any]]:
     """回收站里的歌（歌词 / NFO 跟着主文件，不单列），新的批次排前面"""
     out: List[Dict[str, Any]] = []
-    if not TRASH_DIR.exists():
+    if not _trash_dir().exists():
         return out
-    for batch in sorted((d for d in TRASH_DIR.iterdir() if d.is_dir()),
+    for batch in sorted((d for d in _trash_dir().iterdir() if d.is_dir()),
                         key=lambda d: d.name, reverse=True):
         for f in sorted(batch.rglob("*")):
             if not f.is_file() or f.suffix.lower() in (".lrc", ".nfo"):
@@ -790,6 +1046,11 @@ def from_trash(paths: List[str], root: str) -> Dict[str, Any]:
                 s = src.with_suffix(side)
                 if s.exists():
                     shutil.move(str(s), str(dest.with_suffix(side)))
+            # 专辑级附属（封面 / 专辑 NFO）一起恢复
+            for side_name in ("cover.jpg", "cover.png", "album.nfo"):
+                s = src.parent / side_name
+                if s.exists():
+                    shutil.move(str(s), str(dest.parent / side_name))
             restored.append(str(dest))
         except Exception as e:  # noqa: BLE001
             failed.append({"path": raw, "error": f"{type(e).__name__}: {e}"})
@@ -815,6 +1076,16 @@ def purge_trash(paths: List[str]) -> Dict[str, Any]:
                 s = src.with_suffix(side)
                 if s.exists():
                     s.unlink()
+            # 专辑级附属（封面 / 专辑 NFO）：回收站里这个目录没别的音频了才一并删
+            parent = src.parent
+            if not any(f.is_file() and f.suffix.lower() in AUDIO_EXT
+                       for f in parent.iterdir()):
+                for side_name in ("cover.jpg", "cover.png", "album.nfo"):
+                    s = parent / side_name
+                    if s.exists():
+                        s.unlink()
+            # 清掉回收站里残留的空目录，只保留到本批次目录这一层（批次由 _trash_tidy 收尾）
+            _remove_empty_dirs_upward(parent, _trash_batch(src))
             killed.append(raw)
         except Exception as e:  # noqa: BLE001
             failed.append({"path": raw, "error": f"{type(e).__name__}: {e}"})
@@ -825,7 +1096,7 @@ def purge_trash(paths: List[str]) -> Dict[str, Any]:
 def to_trash(paths: List[str], root: str) -> Dict[str, Any]:
     """移入回收站（/data/_trash/时间戳/原相对路径），可找回，不是彻底删除"""
     stamp = time.strftime("%Y%m%d-%H%M%S")
-    dest_root = TRASH_DIR / stamp
+    dest_root = _trash_dir() / stamp
     moved: List[str] = []
     failed: List[Dict[str, str]] = []
     for raw in paths:
@@ -847,6 +1118,21 @@ def to_trash(paths: List[str], root: str) -> Dict[str, Any]:
                 side = src.with_suffix(side_suffix)
                 if side.exists():
                     shutil.move(str(side), str(dest.with_suffix(side_suffix)))
+            # 专辑级附属（封面 / 专辑 NFO）：只有这张专辑目录里没别的音频文件了才带走
+            # （删的是这张专辑的最后一首歌，封面/专辑 NFO 就是它的；还有别的歌就别动）
+            parent = src.parent
+            if not any(f.is_file() and f.suffix.lower() in AUDIO_EXT
+                       for f in parent.iterdir()):
+                for side_name in ("cover.jpg", "cover.png", "album.nfo"):
+                    s = parent / side_name
+                    if s.exists():
+                        shutil.move(str(s), str(dest.parent / side_name))
+            # 清掉被移走后残留的空目录：专辑目录空了就连它一起删，歌手目录也空了
+            # 就继续往上删，只保留到它所在的 download/musics 这一层根目录。
+            # 这些目录下次下载/整理时会 mkdir(parents=True) 自动重建。
+            rel_parts = rel.parts
+            stop = (Path(root) / rel_parts[0]) if len(rel_parts) >= 2 else parent
+            _remove_empty_dirs_upward(parent, stop)
         except Exception as e:  # noqa: BLE001
             failed.append({"path": raw, "error": f"{type(e).__name__}: {e}"})
     return {"moved": moved, "failed": failed, "trash": str(dest_root),

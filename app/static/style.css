@@ -192,14 +192,20 @@ h2 { font-size: 16px; margin: 0 0 4px; font-weight: 620; }
   color: #fff;
 }
 .btn.primary:hover { box-shadow: 0 12px 32px rgba(123,140,255,.5); }
-/* 危险操作（删除 / 清空 / 彻底删除）的确认按钮 */
+/* 危险操作（删除 / 清空 / 移入回收站 / 彻底删除）：
+   统一红色背景 + 白字，hover / active 用更深的红 */
 .btn.danger {
-  background: linear-gradient(135deg, #f87171, #ef4444);
+  background: linear-gradient(135deg, #ef4444, #dc2626);
   border-color: rgba(255,255,255,.24);
-  box-shadow: 0 8px 26px rgba(248,113,113,.38);
+  box-shadow: 0 8px 26px rgba(220,38,38,.38);
   color: #fff;
 }
-.btn.danger:hover { box-shadow: 0 12px 32px rgba(248,113,113,.5); }
+.btn.danger:hover {
+  background: linear-gradient(135deg, #dc2626, #b91c1c);
+  box-shadow: 0 12px 32px rgba(185,28,28,.52);
+}
+.btn.danger:active { background: linear-gradient(135deg, #b91c1c, #991b1b); }
+.btn.danger svg { stroke: #fff; }
 .btn[disabled] { opacity: .55; cursor: not-allowed; transform: none; }
 .btn-row { display: flex; gap: 12px; flex-wrap: wrap; margin-top: 4px; }
 /* 确认浮层的正文（换行交给 white-space，不用 <br>） */
@@ -421,7 +427,7 @@ label.switch .lbl em { display: block; font-style: normal; font-size: 12px; colo
 .trk .right .pill { white-space: nowrap; }
 .trk .right.ops {
   display: grid;
-  grid-template-columns: 136px 76px 45px 45px;
+  grid-template-columns: 96px 136px 76px 45px 45px;
   align-items: center;
   gap: 8px;
   justify-items: end;
@@ -434,21 +440,23 @@ label.switch .lbl em { display: block; font-style: normal; font-size: 12px; colo
    现在小标放进信息区（.meta 里的 .tag-us），右侧只剩固定列，行行对齐。 */
 .trk .right.cld {
   display: grid;
-  grid-template-columns: 72px 72px 72px 45px 45px 45px;
+  grid-template-columns: 96px 72px 72px 72px 45px 45px 45px;
   align-items: center;
   gap: 8px;
   justify-items: end;
   flex-wrap: nowrap;
 }
 .trk .right.cld .btn { white-space: nowrap; }
-/* 信息区里的「本工具上传」小标（从右侧按钮列移过来的） */
-.trk .meta > .tag-us { display: inline-flex; margin-top: 4px; font-size: 11.5px; padding: 2px 9px; }
+/* 信息区里的「本工具上传」小标：跟在源文件名同一行（在 .fpath 内部，inline 排） */
+.trk .meta .tag-us { display: inline-flex; margin: 0 0 0 8px; vertical-align: middle; font-size: 11.5px; padding: 2px 9px; }
 /* 曲目行右侧的状态图标（💾 本地 / ☁ 云盘 / 歌单）。都是 45px，每行排成一竖线
    💾=已在本地；💾+红感叹号=本地没有；白云=在云盘；白云+绿勾=在云盘且本地有；
    红云+白感叹号=不在云盘；歌单图标：白=在歌单，红+白感叹号=不在歌单，灰=认不出是哪首 */
 .ci-icon { width: 45px; height: 45px; flex: 0 0 45px; display: block; }
 .ci-icon.ci-disk, .ci-icon.ci-disk-alert, .ci-icon.ci-in { color: #fff; }
 .ci-icon.ci-out { color: var(--err); }
+/* 「云盘里有个同名条目、但不一定是这个版本」——用警示黄，并且可点（仍能上传） */
+.ci-icon.ci-maybe { color: var(--warn); }
 .ci-icon.ci-unknown { color: rgba(255, 255, 255, .38); }
 
 /* 筛选片：同组单选（点一下只看这一类），组与组之间是「并且」 */
@@ -615,7 +623,7 @@ textarea:focus {
   /* 换行后仍是「音源 → 下载 → 状态」三列，只是整体靠左，
      前两列宽度不变，所以状态标签的起点仍然对齐 */
   .trk .right.ops {
-    grid-template-columns: 130px 76px 45px 45px;
+    grid-template-columns: 96px 130px 76px 45px 45px;
     justify-items: start;
   }
   .trk .right.ops .src-sel { width: 130px; max-width: 130px; }
@@ -652,7 +660,7 @@ textarea:focus {
 /* 右侧：状态灯 + 三个按钮；按钮列宽度一致，各行对齐 */
 .trk .right.org {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto auto auto 45px;   /* 状态 / 编辑 / 刮削 / 删除 / 云盘标识 */
+  grid-template-columns: 96px minmax(0, 1fr) auto auto auto 45px;   /* ID / 状态 / 编辑 / 刮削 / 删除 / 云盘标识 */
   align-items: center;
   gap: 8px;
   justify-items: end;
@@ -669,6 +677,20 @@ textarea:focus {
   background: rgba(242, 245, 255, .3); }
 .mk.ok { color: #8ef0b6; border-color: rgba(90, 220, 150, .4); background: rgba(90, 220, 150, .1); }
 .mk.ok::before { background: #5adc96; }
+/* 已下架（网易云官方还留着元数据、但版权没了不能播）—— 橙色警示，别和「缺」的灰色混。
+   紧凑小标：跟在歌名后面同一行，三字居中 */
+.mk.delisted { color: #fde68a; border-color: rgba(251, 191, 36, .45); background: rgba(251, 191, 36, .12);
+  font-size: 10.5px; padding: 1px 7px; gap: 0; margin-left: 7px; vertical-align: middle; }
+.mk.delisted::before { display: none; }
+
+/* 网易云歌曲 ID 小标（歌单页 / 云盘页 / 整理页）：点击复制。
+   在右侧 grid 里占一个固定列；没有 ID 的行渲染空 span 占位，保证按钮列行行对齐 */
+.sid-tag { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 11px; color: var(--text-dim); white-space: nowrap;
+  padding: 2px 4px; border-radius: 7px; border: 1px solid transparent; overflow: hidden; }
+.sid-tag[data-sid] { cursor: pointer; }
+.sid-tag[data-sid]:hover { color: rgba(242, 245, 255, .85); border-color: var(--glass-border);
+  background: rgba(255, 255, 255, .05); }
 
 /* 编辑面板（在曲目行下方就地展开） */
 .org-edit { grid-column: 1 / -1; margin-top: 10px; padding: 16px;
@@ -802,6 +824,9 @@ a.tile:hover::after { opacity: 1; transform: translateX(2px); }
 .cand { grid-template-columns: 42px minmax(0, 1fr) auto; align-items: center; gap: 4px 12px; }
 .cand-cov { grid-row: 1 / 3; width: 42px; height: 42px; border-radius: 8px; object-fit: cover;
   background: rgba(255,255,255,.06); border: 1px solid var(--glass-border); }
+/* 候选封面加载失败后被换成占位块（见 base.html 的 covFail）→ 图标居中，尺寸与图一致 */
+.cand-cov.ph { display: grid; place-items: center; }
+.cand-cov.ph .ci-ph { width: 18px; height: 18px; color: rgba(255,255,255,.45); }
 .cand strong { grid-column: 2; grid-row: 1; font-size: 14px; font-weight: 550;
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .cand .cand-sub { grid-column: 2; grid-row: 2; font-size: 12.5px; color: var(--text-dim);

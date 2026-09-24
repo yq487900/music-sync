@@ -8,7 +8,9 @@ CONFIG_PATH = Path("/data/config.json")
 QUALITY_CHAIN = ["jymaster", "hires", "lossless", "exhigh", "standard"]
 
 DEFAULT: Dict[str, Any] = {
-    "download_dir": "/music",
+    "download_dir": "/music/download",
+    "library_dir": "/music/musics",
+    "trash_dir": "/music/_trash",
     "platforms": {
         "netease": {"cookie": "", "user_id": ""},
     },
@@ -16,7 +18,9 @@ DEFAULT: Dict[str, Any] = {
     # 要同步的歌单：[{"id": 123, "name": "可选自定义名"}]
     "playlists": [],
     # 音乐库整理方式：album=按专辑 | artist=按歌手 | playlist=按歌单 | flat=平铺
-    "library": {"layout": "album", "naming": ""},
+    # auto_archive：下载/搜集来的歌，元数据已齐全（歌名/歌手/专辑/封面/歌词 + 网易云 id）
+    # → 自动移进「整理后」曲库，不用再手动刮削一次
+    "library": {"layout": "album", "naming": "", "auto_archive": True},
     "quality": {"chain": list(QUALITY_CHAIN), "upgrade_existing": True},
     "lyrics": {"lrc": True, "embed": True},
     "nfo": True,
@@ -32,8 +36,14 @@ DEFAULT: Dict[str, Any] = {
     },
     # 第三方音源（洛雪兼容 JS 脚本）
     "music_sources": [],
-    # 网易云云盘（calibrate=上传完成后按歌单数据校准本地封面/专辑/歌词）
-    "cloud": {"auto_upload": False, "calibrate": True},
+    # 网易云云盘。calibrate_mode = 上传完成后对**本地文件**的校准力度：
+    #   off  一个字节都不动（云盘那边照样匹配正式曲目，只是本地不碰）
+    #   fill 只补空：本地缺的才补，已有的一律不覆盖（默认）
+    #   full 按网易云官方信息逐项纠正（会覆盖手改过的值）
+    # calibrate 是早期布尔开关，保留只为读老配置（True→full / False→off）
+    # delete_local_after_upload：上传云盘成功后，自动把本地文件（连同封面/歌词/NFO）移进回收站
+    "cloud": {"auto_upload": False, "calibrate": True, "calibrate_mode": "fill",
+              "delete_local_after_upload": False},
     # 歌单监控：on=开关；mode=new 从现在开始监控 / full 全量扫描补齐后再监控
     "monitor": {"on": False, "mode": "new", "since": 0, "batch": 20, "interval": 2, "token": "",
                 "last_run": "", "last_result": {}},
@@ -81,9 +91,17 @@ def load() -> Dict[str, Any]:
     if not isinstance(cfg.get("playlists"), list):
         cfg["playlists"] = []
     if not isinstance(cfg.get("cloud"), dict):
-        cfg["cloud"] = {"auto_upload": False, "calibrate": True}
+        cfg["cloud"] = {"auto_upload": False, "calibrate": True, "calibrate_mode": "fill"}
     cfg["cloud"].setdefault("auto_upload", False)
     cfg["cloud"].setdefault("calibrate", True)
+    cfg["cloud"].setdefault("delete_local_after_upload", False)
+    # 老配置只写了布尔 calibrate（没有 calibrate_mode）→ 按它原来的值换算成档位，
+    # 不能默认值盖掉：显式关过校准的人（calibrate=false）得保持关着。
+    # 注意两点：① 要读**文件里的原值**（_merge 已用默认值补上了 calibrate_mode）；
+    #          ② 全新安装（没有配置文件）不该走这里 —— 让默认值 fill 生效。
+    saved_cloud = data.get("cloud") if isinstance(data, dict) else None
+    if isinstance(saved_cloud, dict) and not str(saved_cloud.get("calibrate_mode") or ""):
+        cfg["cloud"]["calibrate_mode"] = "full" if bool(saved_cloud.get("calibrate", True)) else "off"
     if not isinstance(cfg.get("monitor"), dict):
         cfg["monitor"] = {"on": False, "mode": "new", "since": 0, "batch": 20}
         cfg["monitor"].setdefault("interval", 2)
@@ -93,7 +111,10 @@ def load() -> Dict[str, Any]:
     cfg["monitor"].setdefault("batch", 20)
     cfg["monitor"].setdefault("interval", 2)
     cfg["monitor"].setdefault("token", "")
-    for key in ("download_dir",):
+    # 旧版 download_dir 是 /music 根目录 → 迁移到 /music/download 子目录
+    if str(cfg.get("download_dir") or "").rstrip("/") == "/music":
+        cfg["download_dir"] = "/music/download"
+    for key in ("download_dir", "library_dir", "trash_dir"):
         try:
             Path(cfg[key]).mkdir(parents=True, exist_ok=True)
         except OSError:

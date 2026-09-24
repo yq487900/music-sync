@@ -32,8 +32,8 @@
     <button class="btn sm primary" id="btn-restore-sel"><svg><use href="#ic-restore"/></svg>恢复勾选的</button>
     <button class="btn sm" id="btn-restore-all">全部恢复</button>
     <span class="tb-sep"></span>
-    <button class="btn sm" id="btn-purge-sel"><svg><use href="#ic-trash"/></svg>清空勾选的</button>
-    <button class="btn sm" id="btn-purge-all">全部清空</button>
+    <button class="btn sm danger" id="btn-purge-sel"><svg><use href="#ic-trash"/></svg>清空勾选的</button>
+    <button class="btn sm danger" id="btn-purge-all">全部清空</button>
   </div>
   <div id="list"><div class="empty"><div class="big">⏳</div>正在读取回收站…</div></div>
   <div id="pager"></div>
@@ -92,7 +92,7 @@ function render() {
       </span>
       <span class="right">
         <button class="btn mini" data-restore="${esc(t.path)}">恢复</button>
-        <button class="btn mini" data-purge="${esc(t.path)}">清空</button>
+        <button class="btn mini danger" data-purge="${esc(t.path)}">清空</button>
       </span>
     </div>`).join('');
   box.querySelectorAll('.sel').forEach(cb => {

@@ -4,11 +4,16 @@ from fastapi.staticfiles import StaticFiles
 from contextlib import asynccontextmanager
 import asyncio
 import base64
+import hashlib
+import ipaddress
+import json
 import math
 import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional
+from urllib.parse import urlsplit
 
+import aiohttp
 from sqlalchemy import text
 
 import app.cloud as cloud
@@ -21,9 +26,9 @@ import app.platforms as platforms
 from app.auth.netease_qr import NeteaseQR
 from app.db.models import Playlist, SessionLocal, Track
 from app.ncm import QUALITY_CHAIN, Ncm, NcmError
-from app.runner import (DOWNLOADS, ORGANIZE, UPLOADS, _enrich_after_upload, apply_config,
-                        enqueue_backfill, enqueue_download_one, enqueue_downloads,
-                        enqueue_upload, enqueue_uploads)
+from app.runner import (DOWNLOADS, ORGANIZE, UPLOADS, _enrich_after_upload, add_to_playlists,
+                        apply_config, enqueue_backfill, enqueue_download_one, enqueue_downloads,
+                        enqueue_upload, enqueue_upload_paths, enqueue_uploads)
 from app.scheduler import reschedule, start, start_scheduler, status
 from app.sync.netease import SRC_OFFICIAL, source_label
 from app.tagger import LAYOUT_LABELS
@@ -95,9 +100,53 @@ def _ensure_indexes() -> None:
         print(f"[startup] 建立索引跳过：{e}", flush=True)
 
 
+MUSIC_ROOT = "/music"        # 三个目录（download / musics / _trash）的共同父目录
+
+
+def _migrate_music_paths(cfg: Dict[str, Any]) -> int:
+    """老库路径迁移：把挂在 /music 根上的老曲库路径改到新的「整理后曲库」目录下
+
+    目录拆成 /music/download（待整理）/ /music/musics（整理后）/ /music/_trash（回收站）
+    之后，原先直接放在 /music 下的那份曲库，在新结构里位于 /music/musics 里。
+    曲目库里存的还是老路径（/music/aespa/x.flac），不改的话所有歌都会被判成
+    「本地没有」、云盘待上传列表还会把它们当成文件已丢而重置成未下载。
+
+    只在**老路径确实不存在、新路径确实存在**时才改 ——
+    挂载方式没变（或用户另有映射）时什么都不会动，重复执行也安全。
+    """
+    lib = str(cfg.get("library_dir") or "/music/musics").rstrip("/")
+    dl = str(cfg.get("download_dir") or "/music/download").rstrip("/")
+    trash = str(cfg.get("trash_dir") or "/music/_trash").rstrip("/")
+    keep = (lib + "/", dl + "/", trash + "/")
+    n = 0
+    try:
+        db = SessionLocal()
+        try:
+            rows = (db.query(Track)
+                    .filter(Track.file_path.like(MUSIC_ROOT + "/%")).all())
+            for tr in rows:
+                p = str(tr.file_path or "")
+                if not p or p.startswith(keep) or Path(p).exists():
+                    continue
+                cand = lib + p[len(MUSIC_ROOT):]
+                if Path(cand).exists():
+                    tr.file_path = cand
+                    n += 1
+            if n:
+                db.commit()
+        finally:
+            db.close()
+    except Exception as e:  # noqa: BLE001
+        print(f"[startup] 迁移老曲库路径跳过：{e}", flush=True)
+    if n:
+        print(f"[startup] 已把 {n} 条曲目记录迁移到 {lib} 下", flush=True)
+    return n
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     _ensure_indexes()
+    _migrate_music_paths(config.load())
     start_scheduler()
     yield
     from app.scheduler import scheduler
@@ -207,6 +256,10 @@ def _song_to_row(s: dict) -> dict:
         "album": str(al.get("name") or ""),
         "cover": str(al.get("picUrl") or ""),
         "duration": int((s.get("dt") or 0) // 1000),
+        # al.id=0 = 已下架（网易云官方还留着元数据、但没有专辑信息，版权也没了）。
+        # 歌单页据此打「已下架」角标并支持筛选。注意不能用 copyright：
+        # 实测大量正常老歌 copyright 也是 0，只有 al.id=0 才是下架歌的稳定信号。
+        "al_id": int(al.get("id") or 0),
     }
 
 
@@ -341,8 +394,11 @@ async def legacy_login_redirect():
 @app.post("/config")
 async def save_config(
     download_dir: str = Form(...),
+    library_dir: str = Form("/music/musics"),
+    trash_dir: str = Form("/music/_trash"),
     layout: str = Form("album"),
     naming: str = Form(""),
+    auto_archive: bool = Form(True),
     chain: str = Form(""),
     upgrade_existing: bool = Form(True),
     lrc: bool = Form(True),
@@ -356,16 +412,24 @@ async def save_config(
     auto_sync: bool = Form(False),
     auto_download: bool = Form(False),
     auto_upload: bool = Form(False),
-    calibrate: bool = Form(True),      # 表单一定会带这个字段（见 config.html 的 chk）
+    delete_local_after_upload: bool = Form(False),
+    calibrate: bool = Form(True),      # 老表单字段（已由 calibrate_mode 取代），保留兼容
+    calibrate_mode: str = Form(""),    # off / fill / full；空 = 保持原值
     monitor_on: bool = Form(False),
     monitor_mode: str = Form("new"),
     monitor_batch: int = Form(20),
+    monitor_interval: int = Form(0),    # 检查间隔（分钟）；0/非法 = 保持原值
+    monitor_token: str = Form(""),      # 触发密钥。/api/monitor/run 要校验它
     sync_time: str = Form("02:00"),
 ):
     cfg = config.load()
-    cfg["download_dir"] = download_dir
+    # 三个目录：待整理（下载）/ 整理后曲库 / 回收站 —— 各自可以映射到不同的宿主机路径
+    cfg["download_dir"] = download_dir.strip() or "/music/download"
+    cfg["library_dir"] = library_dir.strip() or "/music/musics"
+    cfg["trash_dir"] = trash_dir.strip() or "/music/_trash"
     cfg["library"] = {"layout": layout if layout in LAYOUT_LABELS else "album",
-                      "naming": naming.strip()}
+                      "naming": naming.strip(),
+                      "auto_archive": bool(auto_archive)}
     levels = [s.strip() for s in chain.split(",") if s.strip()]
     cfg["quality"] = {"chain": levels or list(QUALITY_CHAIN),
                       "upgrade_existing": bool(upgrade_existing)}
@@ -378,11 +442,30 @@ async def save_config(
         "fail_backoff": max(0, int(fail_backoff)),
         "backoff_hours": max(0, int(backoff_hours)),
     }
-    cfg["cloud"] = {"auto_upload": bool(auto_upload), "calibrate": bool(calibrate)}
+    # 「上传后自动校准」的力度：off 不碰本地文件 / fill 只补空（默认）/ full 全量纠正。
+    # 云盘条目匹配正式曲目不受它影响 —— 那是让云盘上有封面、显示成正式曲目。
+    old_cloud = cfg.get("cloud") or {}
+    mode = str(calibrate_mode or "").strip().lower()
+    if mode not in ("off", "fill", "full"):
+        mode = str(old_cloud.get("calibrate_mode") or "").strip().lower()
+    if mode not in ("off", "fill", "full"):
+        mode = "full" if bool(old_cloud.get("calibrate", True)) else "off"
+    cfg["cloud"] = {"auto_upload": bool(auto_upload),
+                    "delete_local_after_upload": bool(delete_local_after_upload),
+                    "calibrate": mode != "off",       # 老字段跟着档位走，别再有两份真相
+                    "calibrate_mode": mode}
     # 歌单监控：开启「从现在开始」时记录起算时间；选「全量扫描补齐」时先补齐再自动转监控
+    # 注意 interval / token 必须一起带上：以前这里重建 mon 时漏了它们，
+    # 结果**每次保存配置都会把检查间隔重置成 2 分钟、把触发密钥清空**（2026-09-24 修）。
     old_mon = dict(cfg.get("monitor") or {})
     mode = monitor_mode if monitor_mode in ("new", "full") else "new"
+    try:
+        interval = int(monitor_interval or 0)
+    except (TypeError, ValueError):
+        interval = 0
     mon = {"on": bool(monitor_on), "mode": mode, "batch": max(1, min(500, int(monitor_batch))),
+           "interval": interval if interval > 0 else max(1, int(old_mon.get("interval") or 2)),
+           "token": str(monitor_token or "").strip(),
            "since": float(old_mon.get("since") or 0),
            "last_run": old_mon.get("last_run") or "", "last_result": old_mon.get("last_result") or {}}
     if mon["on"]:
@@ -581,8 +664,10 @@ def _local_map(sids: list) -> dict:
 @app.get("/api/playlists/{pid}/tracks")
 async def api_playlist_tracks(pid: int, page: int = 1, size: int = 20, q: str = "",
                               local: str = "all", cloud: str = "all",
+                              delisted: str = "all",
                               refresh: int = 0, sort: str = "", order: str = "asc"):
-    """歌单曲目。筛选：local=all|yes|no、cloud=all|in|out（先筛再分页，页码才准）
+    """歌单曲目。筛选：local=all|yes|no、cloud=all|in|out、delisted=all|yes|no
+    （先筛再分页，页码才准）
 
     sort=""=歌单原顺序；title=歌名；artist=歌手；time=加入歌单先后（用歌单内序号近似）。
     注：SQLite/Python 对中文按 Unicode 码位排序，不是拼音序。
@@ -613,7 +698,7 @@ async def api_playlist_tracks(pid: int, page: int = 1, size: int = 20, q: str = 
             **t,
             "index": i + 1,
             "track_id": (row.id if row is not None else 0),
-            "local": bool(row is not None and row.status == "ok" and row.file_path),
+            "local": bool(row is not None and row.status == "ok" and _is_local_file(row.file_path)),
             "status": (row.status if row is not None else ""),
             "level": (row.level if row is not None else ""),
             "error": (row.last_error if row is not None else ""),
@@ -624,6 +709,8 @@ async def api_playlist_tracks(pid: int, page: int = 1, size: int = 20, q: str = 
             # True=在云盘 / False=不在 / None=索引还没建好（不确定）
             "in_cloud": ci.lookup(t["sid"], t.get("title"), t.get("artist"),
                                   (row.cloud_sid if row is not None else "")),
+            # al_id=0 = 已下架（官方还留着元数据、但没有专辑/版权）
+            "delisted": bool(t.get("al_id") == 0),
         })
     # 搜索：先过滤再分页，页码才准确（字段名是 title，别写成 name——那样歌名搜不到）
     items = [x for x in items if _hit(x, q, ("title", "artist", "album"))]
@@ -632,7 +719,9 @@ async def api_playlist_tracks(pid: int, page: int = 1, size: int = 20, q: str = 
               "local_yes": sum(1 for x in items if x["local"]),
               "local_no": sum(1 for x in items if not x["local"]),
               "cloud_in": sum(1 for x in items if x["in_cloud"] is True),
-              "cloud_out": sum(1 for x in items if x["in_cloud"] is False)}
+              "cloud_out": sum(1 for x in items if x["in_cloud"] is False),
+              "delisted_yes": sum(1 for x in items if x["delisted"]),
+              "delisted_no": sum(1 for x in items if not x["delisted"])}
     if local == "yes":
         items = [x for x in items if x["local"]]
     elif local == "no":
@@ -641,6 +730,10 @@ async def api_playlist_tracks(pid: int, page: int = 1, size: int = 20, q: str = 
         items = [x for x in items if x["in_cloud"] is True]
     elif cloud == "out":
         items = [x for x in items if x["in_cloud"] is False]
+    if delisted == "yes":
+        items = [x for x in items if x["delisted"]]
+    elif delisted == "no":
+        items = [x for x in items if not x["delisted"]]
     # 排序放在筛选之后、分页之前，否则页码会错
     _srt = (sort or "").lower()
     _rev = (order or "asc").lower() == "desc"
@@ -678,7 +771,7 @@ async def api_playlist_fill(pid: int, request: Request):
     in_cloud = 0
     for t in tracks:
         row = localmap.get(t["sid"])
-        local = bool(row is not None and row.status == "ok" and row.file_path)
+        local = bool(row is not None and row.status == "ok" and _is_local_file(row.file_path))
         got = ci.lookup(t["sid"], t.get("title"), t.get("artist"),
                         (row.cloud_sid if row is not None else ""))
         if got is True:
@@ -740,7 +833,7 @@ def _track_view(t: Track, cfg: dict) -> dict:
         "cloud_sid": t.cloud_sid or "", "file": (t.file_path or ""),
         "downloaded": bool(t.downloaded),
         # 本地有没有这个文件（下载成功且有落盘路径）
-        "local": bool(t.status == "ok" and t.file_path),
+        "local": bool(t.status == "ok" and _is_local_file(t.file_path)),
     }
 
 
@@ -1037,8 +1130,8 @@ async def api_home():
     # 回收站（只数文件，不读标签，图快）
     trash_count = trash_size = 0
     try:
-        if organize.TRASH_DIR.exists():
-            for f in organize.TRASH_DIR.rglob("*"):
+        if organize.trash_root().exists():
+            for f in organize.trash_root().rglob("*"):
                 if f.is_file() and f.suffix.lower() not in (".lrc", ".nfo"):
                     trash_count += 1
                     trash_size += f.stat().st_size
@@ -1089,34 +1182,11 @@ async def api_playlists_add_tracks(request: Request):
                                       "重新上传一次试试"}, status_code=400)
     cfg = config.load()
     cookie = _cookie(cfg)
-    uid = str(((cfg.get("platforms") or {}).get("netease") or {}).get("user_id") or "")
     if not cookie:
         return JSONResponse({"error": "还没登录网易云，请先扫码登录"}, status_code=401)
-    ncm = Ncm(cookie=cookie)
-    added: List[str] = []
-    failed: List[Dict[str, str]] = []
-    try:
-        for pid in pids:
-            try:
-                # 这个 ncm-api（@neteasecloudmusicapienhanced）里正确、且用网易云**新版**上游
-                # 接口的路由是 /playlist/tracks：op=add/del + pid + tracks（逗号分隔）。
-                # 踩过的坑：/playlist/manipulate/tracks 这个路由压根不存在（返回空 body）；
-                # /playlist/track/add 存在但用的是网易云已废弃的旧接口（恒回 401 无权限操作歌单）
-                r = await ncm.get("/playlist/tracks", op="add", pid=pid,
-                                  tracks=",".join(str(x) for x in sids))
-                code = str((r or {}).get("status") or (r or {}).get("code") or "")
-                if code in ("200", "201") or (r or {}).get("body"):
-                    added.append(pid)
-                else:
-                    failed.append({"pid": pid,
-                                   "msg": str((r or {}).get("message") or f"code={code}")})
-            except NcmError as e:
-                failed.append({"pid": pid, "msg": str(e)})
-    finally:
-        await ncm.close()
-    if added:      # 歌单变了 → 把歌单索引刷一遍（云盘页的「在歌单」状态跟着更新）
-        playlist_index.index.ensure_async(cookie, uid, force=True)
-    return {"ok": True, "added_to": added, "failed": failed, "count": len(added)}
+    res = await add_to_playlists(cfg, sids, pids)
+    return {"ok": True, "added_to": res["added_to"], "failed": res["failed"],
+            "count": res["count"]}
 
 
 @app.get("/api/cloud/quota")
@@ -1167,13 +1237,14 @@ async def _cloud_all(cfg: Dict[str, Any]) -> List[Dict[str, Any]]:
 @app.get("/api/cloud")
 async def api_cloud(page: int = 1, size: int = 20, q: str = "", cover: str = "all",
                     album: str = "all", pl: str = "all", local: str = "all",
+                    delisted: str = "all",
                     fresh: int = 0, sort: str = "", order: str = "asc",
                     want_sids: int = 0):
     """云盘歌曲列表：直接用云盘索引（全量在内存），支持搜索 + 筛选 + 状态图标
 
     筛选（all|yes|no）：cover=有没有封面（云盘条目的封面只能来自「匹配到正式曲目」，
     所以「没封面」＝网易云数据库里没有这首歌的信息）；album=有没有正式专辑信息；
-    pl=在不在歌单；local=在不在本地。
+    pl=在不在歌单；local=在不在本地；delisted=是不是已下架。
     fresh=1 时强制重新索引一遍（打开页面用）。
     """
     cfg = config.load()
@@ -1198,10 +1269,16 @@ async def api_cloud(page: int = 1, size: int = 20, q: str = "", cover: str = "al
     try:
         local_sids, local_cloud = set(), set()
         for row in db.query(Track).filter(Track.status == "ok", Track.file_path != "").all():
+            if not _is_local_file(row.file_path):
+                continue
             if row.platform_track_id:
                 local_sids.add(str(row.platform_track_id))
             if row.cloud_sid:
                 local_cloud.add(str(row.cloud_sid))
+        # 「本工具上传过」：DB 登记过 cloud_sid 就算 —— 开了「上传后删除本地」后文件已进
+        # 回收站（status=new、本地没了），不能因此把徽章丢了；歌确实是用本工具传上去的。
+        uploaded_by_us = {str(r[0]) for r in
+                          db.query(Track.cloud_sid).filter(Track.cloud_sid != "").all() if r[0]}
     finally:
         db.close()
 
@@ -1210,7 +1287,7 @@ async def api_cloud(page: int = 1, size: int = 20, q: str = "", cover: str = "al
         sid = str(x.get("sid") or "")
         row = dict(x)
         row["in_local"] = bool(sid and (sid in local_sids or sid in local_cloud))
-        row["from_us"] = bool(sid and sid in local_cloud)
+        row["from_us"] = bool(sid and sid in uploaded_by_us)
         # 只有**匹配到正式曲目**的条目才能判断在不在歌单（未匹配的 sid 是云盘记录 id，
         # 拿它当歌曲 id 去判断/去加歌单都是错的）→ 显示成「未知」
         row["in_playlist"] = (pj.in_playlist(sid)
@@ -1228,6 +1305,8 @@ async def api_cloud(page: int = 1, size: int = 20, q: str = "", cover: str = "al
         "pl_no": sum(1 for x in rows if x["in_playlist"] is False),
         "local_yes": sum(1 for x in rows if x["in_local"]),
         "local_no": sum(1 for x in rows if not x["in_local"]),
+        "delisted_yes": sum(1 for x in rows if x.get("delisted")),
+        "delisted_no": sum(1 for x in rows if not x.get("delisted")),
     }
     def keep(x):
         if cover == "yes" and not x["has_cover"]:
@@ -1245,6 +1324,10 @@ async def api_cloud(page: int = 1, size: int = 20, q: str = "", cover: str = "al
         if local == "yes" and not x["in_local"]:
             return False
         if local == "no" and x["in_local"]:
+            return False
+        if delisted == "yes" and not x.get("delisted"):
+            return False
+        if delisted == "no" and x.get("delisted"):
             return False
         return True
 
@@ -1405,7 +1488,7 @@ async def api_cloud_upload_one(tid: int):
     if not _cookie(cfg):
         return JSONResponse({"error": "还没登录网易云，无法上传"}, status_code=401)
     try:
-        task = enqueue_upload(int(tid))
+        task = enqueue_upload(int(tid), force=True)    # 用户主动点的：不等退避，立刻重排
     except LookupError:
         return JSONResponse({"error": "曲目不存在"}, status_code=404)
     return {"queued": task.snapshot()}
@@ -1701,16 +1784,35 @@ def api_config():
 
 
 # ------------------------------------------------------------- 曲库整理
+def _is_local_file(file_path) -> bool:
+    """本地已存在 = 文件在整理后目录 /music/musics 下且确实存在（不以 download 为准）"""
+    if not file_path:
+        return False
+    p = Path(str(file_path))
+    if not p.exists():
+        return False
+    lib = Path(str(config.load().get("library_dir") or "/music/musics")).resolve()
+    try:
+        return p.resolve().is_relative_to(lib)
+    except (OSError, ValueError):
+        return False
+
+
 def _safe_music_path(raw: str) -> Optional[Path]:
-    """把客户端传来的路径限制在音乐库目录内，防止越权读写库外文件"""
+    """把客户端传来的路径限制在音乐库目录内（download + musics），防止越权读写库外文件"""
     if not raw:
         return None
-    root = Path(str(config.load().get("download_dir") or "/music")).resolve()
+    cfg = config.load()
+    roots = [Path(str(cfg.get("download_dir") or "/music/download")).resolve(),
+             Path(str(cfg.get("library_dir") or "/music/musics")).resolve()]
     try:
         p = Path(raw).resolve()
     except OSError:
         return None
-    return p if p != root and root in p.parents else None
+    for root in roots:
+        if p == root or root in p.parents:
+            return p
+    return None
 
 
 async def _body(request: Request) -> Dict[str, Any]:
@@ -1726,7 +1828,9 @@ async def organize_page(request: Request):
     cfg = config.load()
     return render_template("organize.html",
                            page_ctx(request, "organize", logged_in=bool(_cookie(cfg)),
-                                    root=str(cfg.get("download_dir") or "/music")))
+                                    download_dir=str(cfg.get("download_dir") or "/music/download"),
+                                    library_dir=str(cfg.get("library_dir") or "/music/musics"),
+                                    trash_dir=str(cfg.get("trash_dir") or "/music/_trash")))
 
 
 @app.get("/trash", response_class=HTMLResponse)
@@ -1737,30 +1841,115 @@ async def trash_page(request: Request):
 
 @app.get("/api/organize/list")
 async def api_org_list(page: int = 1, size: int = 20, q: str = "",
-                       tag: str = "all", cover: str = "all", lyric: str = "all"):
+                       tag: str = "all", cover: str = "all", lyric: str = "all",
+                       cloud: str = "all", delisted: str = "all",
+                       section: str = "musics"):
     """曲库列表（默认 20 首/页）+ 体检统计；未变化的文件走缓存不重复读标签
 
-    筛选：tag / cover / lyric 各取 all|yes|no（yes=有，no=缺）
+    筛选：tag / cover / lyric 各取 all|yes|no（yes=有，no=缺）；
+          cloud 取 all|in|out（in=已在云盘，out=不在云盘）；
+          delisted 取 all|yes|no（yes=已下架）
+    section：download=待整理目录（歌单/云盘下载、本地原有、别处搜集来的）
+             musics=整理后目录（已补齐封面/专辑/歌词/标签）
     """
     page, size = _page_args(page, size, 20, 200)
+    section = section if section in ("download", "musics") else "musics"
     data = organize.scan_music()
-    files = data["files"]
-    listed = organize.list_items(files, q, page, size,
-                                 {"tag": tag, "cover": cover, "lyric": lyric})
-    # 标出哪些文件是本工具下载入库的（其余是手动放进音乐库的）；
-    # 同时标出哪些已经在云盘（cloud_state=uploaded）—— 整理页每行要显示云盘标识
+    files = {k: v for k, v in data["files"].items() if v.get("section") == section}
+    # 云盘状态分三档（筛选/分页前就要算好，否则「是否在云盘」这一档筛不了）：
+    #   cloud_paths —— 铁证在云盘：库里记的云盘条目 id 还在云盘，或这首的正式曲目 id
+    #                  能对上云盘里的条目
+    #   cloud_maybe —— 只是歌名/歌手像（云盘索引里有个同名条目，但不一定是这个版本）
+    # 以前把「歌名像」也当「在云盘」，结果云盘里查不到的歌在整理页显示「在云盘」、
+    # 云朵图标还不能点 → 用户根本传不上去（2026-09-24 实测踩到，判定必须收紧）。
     db = SessionLocal()
+    known, cloud_paths = set(), set()
+    ci = cloud_index.index
+    ci_ready = bool(ci.ready)
+    ci_entry_ids = ci.entry_ids if ci_ready else set()
+    ci_sids = ci.sids if ci_ready else set()
     try:
-        known = {r[0] for r in db.query(Track.file_path)
-                 .filter(Track.file_path.isnot(None)).all()}
-        cloud_paths = {r[0] for r in db.query(Track.file_path)
-                       .filter(Track.status == "ok", Track.cloud_state == "uploaded",
-                               Track.file_path.isnot(None)).all()}
+        for r in db.query(Track).filter(Track.file_path.isnot(None)).all():
+            known.add(r.file_path)
+            sid, tid = str(r.cloud_sid or ""), str(r.platform_track_id or "")
+            if (sid and sid in ci_entry_ids) or (tid and tid in ci_sids):
+                cloud_paths.add(r.file_path)
+        if not ci_ready:
+            # 云盘索引还没建好：没法核对，退回「库里说传过就算在云盘」
+            # （宁可显示成在云盘，也别误报「不在云盘」让人重复传一份）
+            cloud_paths = {r.file_path for r in db.query(Track.file_path)
+                           .filter(Track.status == "ok", Track.cloud_state == "uploaded",
+                                   Track.file_path.isnot(None)).all()}
     finally:
         db.close()
-    listed["items"] = [{**r, "in_db": r["path"] in known,
-                        "in_cloud": r["path"] in cloud_paths} for r in listed["items"]]
-    return {"root": data["root"], "scanned": data["total"],
+    cloud_maybe = set()
+    # 云盘条目按文件名索引：既用于判断「上传后本地是否又被改过」，也用于判断「是否下架」
+    # （同名云盘条目若已下架，本地这份大概率是同一首下架歌）
+    cloud_by_name: Dict[str, Dict[str, Any]] = {}
+    if ci_ready:
+        for x in cloud_index.index.items:
+            fn = str(x.get("file_name") or "")
+            if fn and fn not in cloud_by_name:
+                cloud_by_name[fn] = x
+        for key, val in files.items():
+            if key in cloud_paths:
+                continue
+            if cloud_index.index.has_song(val.get("title") or "", val.get("artist") or ""):
+                cloud_maybe.add(key)
+    # 已下架：本地文件标签里的网易云歌曲 id 能对上云盘里「已下架」的条目（同一首歌）。
+    # 用 sid 精确关联 —— 文件名不可靠（整理后文件名带了「歌手 - 」前缀，和云盘
+    # file_name 对不上，按文件名关联会漏）。
+    # 顺带把每行的网易云歌曲 id 也带出来（页面显示「ID xxx」、点击复制，手动匹配用）。
+    path_sid: Dict[str, str] = {}
+    delisted_paths = set()
+    delisted_sids = {str(x.get("sid") or "") for x in ci.items
+                     if x.get("delisted")} if ci_ready else set()
+    for key in files:
+        sid = organize.read_netease_id(Path(key))
+        if not sid:
+            continue
+        path_sid[key] = sid
+        if sid in delisted_sids:
+            delisted_paths.add(key)
+    listed = organize.list_items(files, q, page, size,
+                                 {"tag": tag, "cover": cover, "lyric": lyric,
+                                  "cloud": cloud, "delisted": delisted},
+                                 cloud_paths=cloud_paths,
+                                 delisted_paths=delisted_paths)
+    # 文件 md5 校准：云盘条目自带文件 md5（原文件字节的 md5），本地也算过就能确认
+    # 「云盘上那份 == 本地这份」。这是最硬的证据 —— 名字/id 都可能骗人，md5 不会。
+    #   cloud_same = True  本地这份文件确实在云盘（内容一致）
+    #   cloud_same = False 算过了，云盘里没有这份内容 → 云盘上那条是别的版本
+    #   cloud_same = None  还没算过（前端会按需批量校验一次，不拖慢列表）
+    rows_out = []
+    for r in listed["items"]:
+        md5 = organize.md5_state(r["path"]) or ""
+        hit_item = cloud_index.index.find_by_md5(md5) if (ci_ready and md5) else None
+        hit = hit_item is not None
+        # 云盘上「这首歌」那条的时间：md5 命中就用命中那条，否则按同名文件找。
+        # 前端拿它跟本地 mtime 比 —— 本地更晚 = 上传之后本地又被改过（校准写了标签），
+        # 本地更早 = 云盘那份本来就是别的版本。
+        c_it = hit_item or cloud_by_name.get(str(r.get("name") or "")) or {}
+        rows_out.append({
+            **r,
+            "in_db": r["path"] in known,
+            # md5 命中 = 这份文件确实在云盘（比按 id / 歌名认更硬），并入 in_cloud
+            "in_cloud": (r["path"] in cloud_paths) or hit,
+            "cloud_maybe": r["path"] in cloud_maybe,
+            "file_md5": md5,
+            "cloud_same": (hit if md5 else None),
+            "file_mtime": int(r.get("mtime") or 0),
+            "cloud_add_time": int(c_it.get("add_time") or 0),
+            "cloud_md5": str(c_it.get("md5") or ""),
+            "delisted": r["path"] in delisted_paths,
+            "sid": path_sid.get(r["path"], ""),
+            "section": section,
+        })
+    listed["items"] = rows_out
+    cfg = config.load()
+    root = str(cfg.get("library_dir") or "/music/musics") if section == "musics" \
+        else str(cfg.get("download_dir") or "/music/download")
+    return {"root": root, "section": section, "scanned": len(files),
             "audit": organize.audit(files), **listed}
 
 
@@ -1770,6 +1959,46 @@ async def api_org_scan():
     data = organize.scan_music(refresh=True)
     return {"ok": True, "scanned": data["total"], "changed": data["changed"],
             "audit": organize.audit(data["files"])}
+
+
+@app.post("/api/organize/verify")
+async def api_org_verify(request: Request):
+    """按 md5 校验「云盘上那份」与「本地这份」是不是同一个文件
+
+    body: {"paths": [...]}  指定文件；或 {"section": "musics", "refresh": false} 批量。
+    批量默认**只算还没算过的**（结果按 (大小, 修改时间) 缓存在 /data/file_hash.json，
+    同一文件不会重复算）。算 md5 走线程池，不阻塞事件循环。
+    """
+    body = await _body(request)
+    cfg = config.load()
+    wanted = [str(x) for x in (body.get("paths") or [])]
+    if wanted:
+        paths = [str(q) for q in (_safe_music_path(x) for x in wanted) if q is not None]
+    else:
+        section = str(body.get("section") or "musics")
+        files = organize.scan_music()["files"]
+        paths = [k for k, v in files.items() if v.get("section") == section]
+        if not body.get("refresh"):
+            paths = [p for p in paths if organize.md5_state(p) is None]
+    paths = paths[:300]                       # 一次最多 300 首，别把请求拖太久
+    if not paths:
+        return {"ok": True, "checked": 0, "same": 0, "diff": 0, "items": [],
+                "note": "都已经校验过了（要重算请带 refresh）"}
+
+    def work() -> List[Dict[str, Any]]:
+        ci_md5 = set(cloud_index.index.md5_item)
+        out = []
+        for p in paths:
+            md5 = organize.file_md5(p)
+            out.append({"path": p, "md5": md5, "same": bool(md5) and md5 in ci_md5})
+        return out
+
+    rows = await asyncio.to_thread(work)
+    return {"ok": True, "checked": len(rows),
+            "same": sum(1 for r in rows if r["same"]),
+            "diff": sum(1 for r in rows if r["md5"] and not r["same"]),
+            "failed": sum(1 for r in rows if not r["md5"]),
+            "items": rows}
 
 
 @app.get("/api/organize/queue")
@@ -1972,6 +2201,8 @@ async def api_org_scrape(request: Request):
                                      dry_run=bool(body.get("preview")))
     if res.get("ok") and not body.get("preview"):
         organize.drop_cache_entry(str(p))
+        if res.get("moved_to"):
+            _update_track_path(str(p), res["moved_to"])
     return res
 
 
@@ -1986,6 +2217,113 @@ async def api_org_cover(path: str):
         return Response(status_code=404)
     return Response(content=data, media_type=("image/png" if data[:8] == b"\x89PNG\r\n\x1a\n"
                                               else "image/jpeg"))
+
+
+# ------------------------------------------------------------- 外链图片代理
+IMG_CACHE_DIR = Path("/data/img_cache")
+IMG_MAX_BYTES = 8 * 1024 * 1024          # 单张图上限，防意外拉到大文件
+IMG_CACHE_KEEP = 4000                    # 缓存文件数上限，超了删最旧的
+IMG_HEADERS = {"Cache-Control": "public, max-age=1209600"}   # 让手机/电脑各自缓存两周
+_IMG_UA = "Mozilla/5.0 (compatible; musicsync/1.0)"
+
+
+def _img_cache_trim() -> None:
+    """缓存目录只保留最近 IMG_CACHE_KEEP 张，避免无限膨胀"""
+    try:
+        files = list(IMG_CACHE_DIR.glob("*.bin"))
+        if len(files) <= IMG_CACHE_KEEP:
+            return
+        files.sort(key=lambda p: p.stat().st_mtime)
+        for p in files[:len(files) - IMG_CACHE_KEEP]:
+            p.unlink(missing_ok=True)
+            p.with_suffix(".json").unlink(missing_ok=True)
+    except OSError:
+        pass
+
+
+def _img_shrink(u: str) -> str:
+    """网易云 CDN 支持 ?param=WxH 取缩略图。
+
+    实测同一张封面：原图 1.5MB，240×240 只有 19KB —— 相差 80 倍。
+    列表里封面最大也就 148px，在 2~3 倍屏下 240px 足够，没必要把原图搬给手机。
+    """
+    try:
+        parts = urlsplit(u)
+    except ValueError:
+        return u
+    host = (parts.hostname or "").lower()
+    if not host.endswith(".music.126.net") or "param=" in (parts.query or ""):
+        return u
+    return u + ("&" if parts.query else "?") + "param=240y240"
+
+
+@app.get("/img")
+async def img_proxy(u: str):
+    """外链图片（封面）的本地代理：服务端取图 + 缩略 + 本地缓存
+
+    为什么不让浏览器直连：网易云 CDN 给的封面是 `http://p*.music.126.net/...`，
+    手机端经常加载不出来（系统「始终使用安全连接」、代理规则、防盗链都会中招），
+    显示成破图/问号，电脑端却正常。这里由 NAS 去取图、页面只连本机 ——
+    手机端不再依赖「手机能不能直连网易云 CDN」；顺带做缩略图 + 本地缓存，
+    同一张封面只打一次外网，手机拿到的也是十几 KB 的小图。
+    """
+    raw = str(u or "").strip()
+    parts = urlsplit(raw)
+    if parts.scheme not in ("http", "https") or not parts.hostname:
+        return Response(status_code=400)
+    # 防 SSRF：只允许公网地址（拒绝内网 / 回环 / 链路本地 / 保留段）
+    try:
+        infos = await asyncio.get_running_loop().getaddrinfo(parts.hostname, None)
+    except OSError:
+        return Response(status_code=404)
+    for info in infos:
+        try:
+            ip = ipaddress.ip_address(str(info[4][0]))
+        except ValueError:
+            return Response(status_code=404)
+        if (ip.is_private or ip.is_loopback or ip.is_link_local
+                or ip.is_reserved or ip.is_multicast or ip.is_unspecified):
+            return Response(status_code=403)
+
+    fetch = _img_shrink(raw)
+    key = hashlib.sha1(fetch.encode("utf-8")).hexdigest()
+    bin_path = IMG_CACHE_DIR / (key + ".bin")
+    meta_path = IMG_CACHE_DIR / (key + ".json")
+    try:
+        if bin_path.exists():                    # 命中缓存：直接返回，不打外网
+            ct = "image/jpeg"
+            try:
+                ct = str(json.loads(meta_path.read_text("utf-8")).get("ct") or ct)
+            except (OSError, ValueError):
+                pass
+            return Response(content=bin_path.read_bytes(), media_type=ct,
+                            headers=IMG_HEADERS)
+    except OSError:
+        pass
+
+    try:
+        timeout = aiohttp.ClientTimeout(total=20, sock_connect=8)
+        async with aiohttp.ClientSession(timeout=timeout) as s:
+            async with s.get(fetch, headers={"Referer": "https://music.163.com/",
+                                             "User-Agent": _IMG_UA}) as r:
+                if r.status != 200:
+                    return Response(status_code=404)
+                ct = str(r.headers.get("Content-Type") or "").split(";")[0].strip().lower()
+                data = await r.read()
+    except Exception:  # noqa: BLE001
+        return Response(status_code=502)
+    if not data or len(data) > IMG_MAX_BYTES:
+        return Response(status_code=502)
+    if not ct.startswith("image/"):
+        ct = "image/jpeg"        # 有的 CDN 不给 Content-Type，封面按 jpeg 处理
+    try:
+        IMG_CACHE_DIR.mkdir(parents=True, exist_ok=True)
+        bin_path.write_bytes(data)
+        meta_path.write_text(json.dumps({"ct": ct, "u": raw}), "utf-8")
+        _img_cache_trim()
+    except OSError:
+        pass
+    return Response(content=data, media_type=ct, headers=IMG_HEADERS)
 
 
 # ------------------------------------------------------------- 云盘歌曲纠错
@@ -2064,10 +2402,13 @@ async def api_cloud_match(sid: str, request: Request):
 
 @app.post("/api/organize/delete")
 async def api_org_delete(request: Request):
-    """移入回收站（/data/_trash，可找回；不是彻底删除）
+    """移入回收站（/music/_trash，可找回；不是彻底删除）
 
     同时把曲目库里的「本地状态」清掉：删除后歌单页 / 下载页 / 云盘待上传 / 云盘歌曲
     列表里都不该再显示「已下载」。
+
+    回收站里按「相对 /music 的路径」存（download/xxx、musics/yyy），
+    这样恢复时能放回它原来所在的目录。
     """
     body = await _body(request)
     wanted = [str(x) for x in (body.get("paths") or [])]
@@ -2076,7 +2417,7 @@ async def api_org_delete(request: Request):
         return JSONResponse({"error": "没有可删除的文件（或路径不在音乐库目录内）"},
                             status_code=400)
     cfg = config.load()
-    root = str(cfg.get("download_dir") or "/music")
+    root = str(organize.music_base(cfg))
     res = organize.to_trash(safe, root)
     moved_paths = [str(Path(root) / rel) for rel in (res.get("moved") or [])]
     for p in moved_paths:
@@ -2085,11 +2426,60 @@ async def api_org_delete(request: Request):
     return res
 
 
+@app.post("/api/organize/upload")
+async def api_org_upload(request: Request):
+    """把整理页里的本地歌曲直接上传到云盘（含「外来的」歌）
+
+    body: {"paths": ["/music/download/xxx.flac", ...], "pids": [歌单 id, ...],
+           "cloud_mode": "" | "again" | "replace"}
+      pids 为空 → 只上传云盘；
+      pids 非空 → 上传到云盘 + 上传成功后加进这些歌单（可多选）。
+      cloud_mode：对「已经在云盘」的处理 —— "" 跳过上传只补歌单；"again" 再传一份新的；
+                  "replace" 先删掉云盘上旧的那一条再传（改过元数据/换了文件时用）。
+
+    **不判断这首歌在不在歌单里** —— 本地原有的歌本来就不一定在歌单里，
+    用户要的就是「先把本地歌传上云盘，再让它进歌单」这条路；
+    也不拦「已经在云盘」的 —— 界面会给重传入口，这里照单执行。
+    """
+    body = await _body(request)
+    cfg = config.load()
+    if not _cookie(cfg):
+        return JSONResponse({"error": "还没登录网易云，无法上传"}, status_code=401)
+    wanted = [str(x) for x in (body.get("paths") or [])]
+    paths = [str(q) for q in (_safe_music_path(x) for x in wanted) if q is not None]
+    if not paths:
+        return JSONResponse({"error": "没有可上传的文件（或路径不在音乐库目录内）"},
+                            status_code=400)
+    pids = [str(x) for x in (body.get("pids") or []) if str(x).strip()]
+    mode = str(body.get("cloud_mode") or "")
+    if mode not in ("", "again", "replace"):
+        mode = ""
+    res = enqueue_upload_paths(cfg, paths, pids=pids, cloud_mode=mode)
+    if not res["queued"] and res["failed"]:
+        return JSONResponse({"error": res["failed"][0].get("error") or "上传入队失败"},
+                            status_code=400)
+    return res
+
+
 def _norm_title_artist(title: Any, artist: Any) -> str:
     """歌名+第一个歌手，去括号/feat.，用来找云盘里的重复条目"""
     t = cloud_index._base_title(str(title or ""))
     a = (str(artist or "").split("/")[0].split("&")[0].split(",")[0].strip().lower())
     return f"{t}|{a}" if t else ""
+
+
+def _update_track_path(old_path: str, new_path: str) -> int:
+    """把曲目库里某文件的 file_path 更新到新路径（整理后移动到 musics 时用）"""
+    db = SessionLocal()
+    try:
+        rows = db.query(Track).filter(Track.file_path == old_path).all()
+        for tr in rows:
+            tr.file_path = new_path
+        if rows:
+            db.commit()
+        return len(rows)
+    finally:
+        db.close()
 
 
 def _sync_local_state(cfg: Dict[str, Any], paths: List[str], mode: str) -> int:
@@ -2158,7 +2548,7 @@ async def api_trash_restore(request: Request):
     """恢复回收站里的歌到音乐库（本地状态同步变回「已下载」）"""
     body = await _body(request)
     cfg = config.load()
-    root = str(cfg.get("download_dir") or "/music")
+    root = str(organize.music_base(cfg))
     paths = [str(x) for x in (body.get("paths") or [])]
     if not paths:
         return JSONResponse({"error": "没有要恢复的文件"}, status_code=400)
@@ -2172,7 +2562,7 @@ async def api_trash_restore(request: Request):
 def _trash_to_lib(path: str, root: str) -> str:
     """回收站里的路径 → 它原本在音乐库里的路径（彻底删除时用它清曲目记录）"""
     try:
-        rel = Path(path).relative_to(organize.TRASH_DIR)
+        rel = Path(path).relative_to(organize.trash_root())
         parts = rel.parts[1:]                      # 第 0 段是时间戳批次目录
         if parts:
             return str(Path(root) / Path(*parts))
@@ -2186,7 +2576,7 @@ async def api_trash_purge(request: Request):
     """彻底删除回收站里的歌（真实删除本地文件；删了就找不回来）"""
     body = await _body(request)
     cfg = config.load()
-    root = str(cfg.get("download_dir") or "/music")
+    root = str(organize.music_base(cfg))
     paths = [str(x) for x in (body.get("paths") or [])]
     if not paths:
         return JSONResponse({"error": "没有要清空的文件"}, status_code=400)

@@ -30,6 +30,7 @@ class PlaylistIndex:
         self.playlists: Dict[str, Dict[str, Any]] = {}   # pid -> {name, track_count, update_time, ids}
         self.sids: Set[str] = set()               # 所有歌单里的歌曲 id 合集
         self.added: Dict[str, float] = {}         # sid -> 最早加入时间（秒）
+        self.latest: Dict[str, float] = {}        # sid -> 最近一次被加进歌单的时间（秒）
         self.pl_name: Dict[str, str] = {}         # sid -> 所在歌单名（第一个）
         self._lock = asyncio.Lock()
         self._task: Optional[asyncio.Task] = None
@@ -65,6 +66,7 @@ class PlaylistIndex:
     def _rebuild_sets(self) -> None:
         sids: Set[str] = set()
         added: Dict[str, float] = {}
+        latest: Dict[str, float] = {}
         names: Dict[str, str] = {}
         for pid, pl in self.playlists.items():
             name = str((pl or {}).get("name") or pid)
@@ -77,8 +79,11 @@ class PlaylistIndex:
                 sids.add(sid)
                 if sid not in added or (ts and ts < added[sid]):
                     added[sid] = ts
+                if ts and ts > latest.get(sid, 0):
+                    latest[sid] = ts
                 names.setdefault(sid, name)
         self.sids, self.added, self.pl_name = sids, added, names
+        self.latest = latest
 
     # ---------------- 状态 ----------------
     @property
@@ -106,18 +111,26 @@ class PlaylistIndex:
         return s in self.sids
 
     def candidates(self, mode: str = "new", since: float = 0.0) -> List[str]:
-        """监控要处理的歌曲 id：new=开启监控之后新加的；full=歌单里全部
+        """监控要处理的歌曲 id：new=开启监控之后新加进歌单的；full=歌单里全部
 
-        since 是秒级时间戳（跟 added 同一口径）。没有加入时间的（at=0）也算老歌，
+        判定用**「最近一次被加进歌单的时间」**而不是「最早」：
+        一首歌如果以前就在别的歌单里，后来又被重新收藏 / 加进另一个歌单，
+        「最早加入时间」是很久以前的旧值 —— 拿它筛会把这种新加的歌永久漏掉。
+        （实测：手机上新收藏的歌监控毫无反应，就是因为被旧时间盖住了。）
+        只取「最近时间」不会踢掉任何原本的候选，只会多认出真正新加的那些。
+
+        since 是秒级时间戳（跟 at 同一口径）。没有加入时间的（at=0）也算老歌，
         不会被 new 模式选中 —— 否则会把整个歌单当新歌下一遍。
         """
+        def when(s: str) -> float:
+            return float(self.latest.get(s) or self.added.get(s) or 0)
+
         if mode == "full":
             out = list(self.sids)
         else:
             cut = float(since or 0)
-            out = [s for s in self.sids
-                   if float(self.added.get(s) or 0) >= cut and float(self.added.get(s) or 0) > 0]
-        out.sort(key=lambda s: (self.added.get(s) or 0, s))
+            out = [s for s in self.sids if when(s) >= cut and when(s) > 0]
+        out.sort(key=lambda s: (when(s), s))
         return out
 
     # ---------------- 刷新 ----------------
