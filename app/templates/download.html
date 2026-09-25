@@ -142,7 +142,7 @@ function renderList(d) {
           ? `<span class="fail-tag" title="${esc(t.error)}">${esc(shortErr(t.error))}</span>` : ''}</strong>
         <span>${esc(t.artist || '')}${t.album ? ' · ' + esc(t.album) : ''}<span class="sz">${t.size ? ' · ' + fmtSize(t.size) : ''}</span>${qualTag(t)}</span>
       </span>
-      <span class="right ops">
+      <span class="right ops ops4">
         ${sourceSelect(t)}
         <button class="btn mini" data-dl="${t.id}">下载</button>
         ${localCell(t)}

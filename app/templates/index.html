@@ -131,7 +131,7 @@ async function loadHome() {
     if (a.avatar) {
       // 头像也是网易云的 http CDN 图，手机端同样容易破图 → 走本机代理，失败就藏起来
       ava.onerror = () => { ava.onerror = null; ava.hidden = true; };
-      ava.src = coverUrl(a.avatar);
+      ava.src = coverUrl(a.avatar, 240);
       ava.referrerPolicy = 'no-referrer';
     } else { ava.hidden = true; }
     const meta = [];

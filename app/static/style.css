@@ -22,6 +22,8 @@
 * { box-sizing: border-box; }
 
 html, body { min-height: 100%; }
+/* 背景色铺到最外层：iOS 橡皮筋回弹 / 刘海安全区外不留白底 */
+html { background: #0b0f1f; }
 
 body {
   margin: 0;
@@ -72,7 +74,7 @@ body {
   top: 0;
   flex: 0 0 226px;
   width: 226px;
-  height: 100dvh;       /* dvh：移动端地址栏伸缩时不会跳变（旧浏览回退到 100vh） */
+  height: 100dvh;       /* dvh：视口高度实时值（等价 100vh，兼容旧浏览器） */
   padding: 22px 14px;
   display: flex;
   flex-direction: column;
@@ -122,6 +124,40 @@ body {
   border-color: rgba(255,255,255,.24);
 }
 .nav a.active .i { opacity: 1; }
+
+/* ---------- 菜单选中态：iOS 26 那种「液态玻璃」高亮块 ----------
+   一块会滑到当前项的玻璃（位置由 base.html 的 placeNavGlass() 算）。
+   ① 不用 backdrop-filter：顶栏已经是实色，模糊看不出差别，却会让手机端重绘变贵、
+      边缘还可能露出 1px 接缝（之前那条白竖线就是它）。这里用「多层半透明渐变 +
+      顶/底内高光 + 镜面描边 + 外阴影」模拟，观感一样、代价小得多。
+   ② 只用 transform / width 过渡：走合成层，手机上不掉帧、不闪。 */
+.nav { position: relative; }
+.nav-glass {
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: 0;
+  height: 0;
+  opacity: 0;
+  border-radius: 14px;
+  pointer-events: none;
+  background:
+    linear-gradient(180deg, rgba(255,255,255,.34) 0%, rgba(255,255,255,.11) 46%,
+                    rgba(255,255,255,.05) 64%, rgba(255,255,255,.20) 100%),
+    linear-gradient(135deg, rgba(123,140,255,.42), rgba(180,108,255,.34));
+  box-shadow:
+    inset 0 1px 0 rgba(255,255,255,.60),
+    inset 0 -1px 0 rgba(255,255,255,.12),
+    inset 0 0 0 1px rgba(255,255,255,.18),
+    0 6px 16px rgba(8,12,30,.45);
+  transition: transform .40s cubic-bezier(.22,1.28,.36,1),
+              opacity .20s ease;
+  /* 只动 transform/opacity（合成层内），width/height 直接设值 —— 过渡宽高会每帧重排，
+     手机上就是卡顿的来源之一 */
+  will-change: transform;
+}
+/* 高亮交给玻璃块，链接本身不再自己铺底色（避免双重高亮、也少一层重绘） */
+.nav a.active { background: transparent; border-color: transparent; }
 
 /* 按钮内的小图标（与导航图标同一套线性风格） */
 .btn svg { width: 15px; height: 15px; flex: 0 0 15px; fill: none; stroke: currentColor;
@@ -427,12 +463,15 @@ label.switch .lbl em { display: block; font-style: normal; font-size: 12px; colo
 .trk .right .pill { white-space: nowrap; }
 .trk .right.ops {
   display: grid;
-  grid-template-columns: 96px 136px 76px 45px 45px;
+  grid-template-columns: 96px 136px 76px 45px 45px;   /* 歌单详情：ID / 音源 / 下载 / 本地 / 云盘 */
   align-items: center;
   gap: 8px;
   justify-items: end;
   flex-wrap: nowrap;
 }
+/* 下载页没有「ID」列，只有 4 个元素（音源 / 下载 / 本地 / 云盘）——单列一档，
+   否则会多出一个空列，既对不齐右侧、音源下拉也被挤进 96px 的 ID 列里 */
+.trk .right.ops4 { grid-template-columns: 136px 76px 45px 45px; }
 .trk .right.ops .src-sel { width: 136px; max-width: 136px; }
 /* 云盘页每行：编辑 / 下载 / 删除 / 💾 / ☁ / 歌单 —— 全是固定列宽。
    以前第一列是 minmax(0, auto) 放「本工具上传」小标，而 grid 列宽是**每行各自**
@@ -574,42 +613,6 @@ textarea:focus {
   .nav a { font-size: 14px; padding: 10px 12px; }
 }
 
-/* 平板 / 手机：菜单转为顶部横条（贴顶，滚动时固定） */
-@media (max-width: 900px) {
-  .shell { flex-direction: column; align-items: stretch; min-height: auto; }
-  .sidebar {
-    position: sticky;
-    top: 0;
-    width: 100%;
-    height: auto;
-    flex: none;
-    display: block;
-    padding: 10px 12px;
-    border-right: 0;
-    border-bottom: 1px solid var(--glass-border);
-  }
-  .brand { padding: 2px 6px 10px; }
-  .nav {
-    flex-direction: row;
-    gap: 6px;
-    overflow-x: auto;
-    padding-bottom: 6px;
-    scrollbar-width: thin;
-    scrollbar-color: rgba(255,255,255,.24) transparent;
-  }
-  /* 菜单横向滚动：保留一条细滚动条配胶，用户才知道右边还有项 */
-  .nav::-webkit-scrollbar { height: 4px; }
-  .nav::-webkit-scrollbar-track { background: transparent; }
-  .nav::-webkit-scrollbar-thumb { background: rgba(255,255,255,.24); border-radius: 4px; }
-  .nav::-webkit-scrollbar-thumb:hover { background: rgba(255,255,255,.36); }
-  .nav a { padding: 9px 13px; font-size: 13.5px; }
-  .nav a .i { flex: 0 0 auto; width: auto; font-size: 14px; }
-  .main { width: 100%; padding: 16px 14px 46px; }
-  .field { max-width: none; }
-  .card { padding: 20px 18px; border-radius: 18px; }
-  h1 { font-size: 22px; }
-}
-
 /* 窄屏：曲目行的右侧操作区换到第二行左对齐，避免被挤扁。
    1100px 起就换行——再窄下去信息行（歌手·专辑·大小·音质·音源）一行放不下。 */
 @media (max-width: 1100px) {
@@ -626,34 +629,9 @@ textarea:focus {
     grid-template-columns: 96px 130px 76px 45px 45px;
     justify-items: start;
   }
+  .trk .right.ops4 { grid-template-columns: 130px 76px 45px 45px; }
   .trk .right.ops .src-sel { width: 130px; max-width: 130px; }
   .src-sel { max-width: none; }
-}
-
-/* 超窄屏：进一步压缩留白 */
-@media (max-width: 560px) {
-  .main { padding: 14px 10px 38px; }
-  .card { padding: 17px 14px; }
-  .hero { flex-direction: column; align-items: flex-start; gap: 12px; }
-  .hero .cover { width: 84px; height: 84px; flex-basis: 84px; }
-  h1 { font-size: 20px; }
-  .btn-row { gap: 9px; }
-  .toolrow { gap: 7px; }
-  .btn { padding: 10px 15px; font-size: 13.5px; }
-  .btn.sm { padding: 9px 12px; font-size: 13px; }
-  .searchbar { padding: 4px 5px 4px 12px; }
-  .searchbar input { padding: 7px 12px; }
-  .toolrow .src-sel { padding: 9px 12px; font-size: 13px; }
-  /* 极窄屏：信息行字号略收 + 收起文件大小，保证「歌手·专辑·时长·音质·音源」完整显示在一行 */
-  .trk .meta > span { font-size: 11px; }
-  .trk .meta .sz { display: none; }
-  /* 单列时宽卡不再跨列，否则会被挤出视口 */
-  .tile.wide { grid-column: span 1; }
-  .tiles { grid-template-columns: repeat(auto-fill, minmax(148px, 1fr)); gap: 8px; }
-  .tile { padding: 10px 12px; }
-  .tile .t-v { font-size: 18px; }
-  .tc-fab { right: 12px; bottom: 12px; }
-  .tc-panel { right: 12px; left: 12px; bottom: 64px; width: auto; }
 }
 
 /* ================= 整理页 ================= */
@@ -727,10 +705,6 @@ textarea:focus {
     justify-items: start; margin-top: 4px; }
   .trk .right.org .st { grid-column: 1 / -1; grid-row: 1; justify-content: flex-start; }
 }
-@media (max-width: 560px) {
-  .org-3 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-}
-
 /* 可点击的状态图标（云盘页：点「不在歌单」图标 → 加到歌单） */
 .ci-icon.ci-clickable { cursor: pointer; transition: transform .12s ease, filter .12s ease; }
 .ci-icon.ci-clickable:hover { transform: scale(1.12); filter: brightness(1.25); }
@@ -926,7 +900,7 @@ a:focus-visible, button:focus-visible, [role="button"]:focus-visible,
 .tc-empty { text-align: center; padding: 26px 12px; color: var(--text-dim); font-size: 13px; }
 
 /* ================= 新增：状态图标图例 ================= */
-.legend-btn { display: inline-flex; align-items: center; gap: 6px; padding: 5px 11px;
+.legend-btn { margin-top: auto; display: inline-flex; align-items: center; gap: 6px; padding: 5px 11px;
   font-size: 12px; border-radius: 999px; cursor: pointer; font-family: inherit;
   color: var(--text-dim); background: rgba(255,255,255,.06); border: 1px solid var(--glass-border); }
 .legend-btn:hover { background: var(--glass-bg-hover); color: var(--text); }
@@ -983,3 +957,9 @@ a:focus-visible, button:focus-visible, [role="button"]:focus-visible,
   box-sizing: content-box;
   pointer-events: none;
 }
+
+/* ================= 局部切页时的交叉淡入 =================
+   菜单走「局部切页」（见 base.html 的 pjGo/pjSwap）：内容原地换、不重载网页，
+   再由 document.startViewTransition 做一次很短的淡入淡出（不支持的浏览器直接换）。 */
+::view-transition-old(root) { animation-duration: .16s; }
+::view-transition-new(root) { animation-duration: .20s; }

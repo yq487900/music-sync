@@ -40,7 +40,7 @@ const state = {page: 1, size: 10};
 function coverHtml(url, cls) {
   const c = cls || 'cov';
   return url
-    ? `<img class="${c}" src="${esc(coverUrl(url))}" alt="" loading="lazy" onerror="covFail(this)">`
+    ? `<img class="${c}" src="${esc(coverUrl(url, 160))}" alt="" loading="lazy" onerror="covFail(this)">`
     : phBox('ic-note', '', c);
 }
 

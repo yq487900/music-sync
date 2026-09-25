@@ -3,14 +3,10 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="dark">
 <title>{% block title %}MusicSync{% endblock %}</title>
-<link rel="stylesheet" href="/static/style.css?v=37">
+<link rel="stylesheet" href="/static/style.css?v=47">
 <meta name="theme-color" content="#0b0f1f">
-<meta name="apple-mobile-web-app-capable" content="yes">
-<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-<meta name="apple-mobile-web-app-title" content="MusicSync">
-<link rel="manifest" href="/static/manifest.webmanifest">
-<link rel="apple-touch-icon" href="/static/icon.svg">
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🎵</text></svg>">
 </head>
 <body>
@@ -23,6 +19,7 @@
       <span>MusicSync<small>音乐同步控制台</small></span>
     </div>
     <nav class="nav">
+      <span class="nav-glass" aria-hidden="true"></span>
       <a href="/" class="{{ 'active' if active == 'home' }}"{% if active == 'home' %} aria-current="page"{% endif %}>
         <span class="i"><svg viewBox="0 0 24 24"><path d="M3 10.6 12 3l9 7.6"/><path d="M5.6 9.6V20h12.8V9.6"/></svg></span>
         <span>首页</span>
@@ -52,7 +49,7 @@
         <span>配置</span>
       </a>
     </nav>
-    <button class="legend-btn" id="legend-btn" type="button" style="margin-top:auto">
+    <button class="legend-btn" id="legend-btn" type="button">
       <svg viewBox="0 0 24 24" style="width:15px;height:15px;fill:none;stroke:currentColor;stroke-width:1.8;flex:0 0 15px">
         <circle cx="12" cy="12" r="8.4"/><path d="M9.7 9.4a2.5 2.5 0 1 1 3.4 2.3c-.7.3-1.1.9-1.1 1.7v.3M12 16.7h.01"/>
       </svg> 图标图例
@@ -194,7 +191,8 @@
           d="M12 14.3v2.5M12 18.4h.01"/>
   </symbol>
 </svg>
-<script>
+<!-- id 必须留着：局部切页时要靠它区分「基础脚本」（只跑一次）和「页面脚本」（每次切页重跑） -->
+<script id="base-script">
 function toast(msg, type) {
   const t = document.getElementById('toast');
   t.textContent = msg;
@@ -364,12 +362,21 @@ function confirmBox(title, msg, okText, danger) {
 
 /** 封面 URL → 本地代理：网易云 CDN 给的是 http 直链，手机端经常加载不出来
  *  （系统「始终使用安全连接」、代理规则、防盗链都会中招）显示成破图/问号，
- *  这里统一交给 NAS 服务端取图并缓存，页面只连本机。本地接口(/开头)与 data: 原样返回。 */
-function coverUrl(u) {
+ *  这里统一交给 NAS 服务端取图并缓存，页面只连本机。本地接口(/开头)与 data: 原样返回。
+ *
+ *  另外把网易云图片 CDN 的**轮换主机**（p1~p4.music.126.net，同一张图两次请求
+ *  可能给不同主机，实测 p3 → p4）统一成 p1：否则同一张封面每次都是「新 URL」，
+ *  浏览器缓存永远命中不了，手机端切一次页就要重下几十上百 KB。
+ *  这几个主机是等价镜像，统一后缓存才真正生效。 */
+function coverUrl(u, px) {
   u = String(u || '').trim();
   if (!u) return '';
   if (u.startsWith('/') || u.startsWith('data:')) return u;
-  return '/img?u=' + encodeURIComponent(u);
+  u = u.replace(/^https?:\/\/p[2-4]\.music\.126\.net\//i, function (m) {
+    return m.replace(/p[2-4]\./, 'p1.');
+  });
+  // px：要多大就传多大（列表封面 42px → 160 足够；大封面 320）。不传就是 240。
+  return '/img?u=' + encodeURIComponent(u) + (px ? '&px=' + px : '');
 }
 
 /** 图片加载失败 → 换成统一占位块（别再出现手机端那种破图/问号） */
@@ -763,6 +770,178 @@ document.addEventListener('keydown', function (e) {
 /* 任务中心轮询：2.5 秒。必须常驻且足够快 —— 否则新任务加入时，
    按钮右上角的数字角标要等到用户点开面板才更新 */
 pollEvery(tcPoll, 2500);
+
+/* ================= 菜单选中态：iOS 26 那种「液态玻璃」高亮块 =================
+   一块会滑到当前项的玻璃（样式见 style.css 的 .nav-glass）。为什么这么做：
+   原来每个链接自己铺一层渐变底色，点击时浏览器换页要等一会儿，期间用户既看不到
+   「选中态反馈」、又会看到旧样式闪一下。现在：
+   ① 手指一按下（pointerdown，比 click 早），高亮立刻滑到那一项 → 立即知道自己切到哪；
+   ② 顺带预取目标页；③ 玻璃块只做 transform/opacity 过渡（不动 width，避免每帧重排）。 */
+function placeNavGlass(animate) {
+  const nav = document.querySelector('.nav');
+  const glass = nav && nav.querySelector('.nav-glass');
+  const act = nav && nav.querySelector('a.active');
+  if (!nav || !glass) return;
+  if (!act) { glass.style.opacity = '0'; return; }
+  const nb = nav.getBoundingClientRect();
+  const ab = act.getBoundingClientRect();
+  if (!animate) glass.style.transition = 'none';       // 首帧直接就位，不要从 0 滑过来
+  glass.style.width = ab.width + 'px';                 // 宽高直接设，不做过渡（避免重排）
+  glass.style.height = ab.height + 'px';
+  glass.style.transform = 'translate(' + Math.round(ab.left - nb.left) + 'px,'
+                        + Math.round(ab.top - nb.top) + 'px)';
+  glass.style.opacity = '1';
+  if (!animate) { void glass.offsetWidth; glass.style.transition = ''; }
+}
+function setNavActive(a) {
+  document.querySelectorAll('.nav a.active').forEach(function (x) {
+    x.classList.remove('active');
+    x.removeAttribute('aria-current');
+  });
+  a.classList.add('active');
+  a.setAttribute('aria-current', 'page');
+  placeNavGlass(true);
+}
+Array.prototype.forEach.call(document.querySelectorAll('.nav a'), function (a) {
+  a.addEventListener('pointerdown', function () {           // 按下就切高亮（比 click 早，鼠标也适用）
+    if (!a.classList.contains('active')) setNavActive(a);
+    const u = a.getAttribute('href');
+    if (u) pjPrefetch(u);
+  }, {passive: true});
+});
+window.addEventListener('resize', function () { placeNavGlass(false); });
+window.addEventListener('pageshow', function () { placeNavGlass(false); });
+if (document.fonts && document.fonts.ready) {
+  document.fonts.ready.then(function () { placeNavGlass(false); });
+}
+placeNavGlass(false);
+
+/* ================= 局部切页（不整页重载）=================
+   问题：点菜单原来是整页跳转 —— 手机（微信 WebView）上要把 CSS/JS/首屏数据全部重来一遍，
+   白屏一下、还会看到旧页面闪一下，慢的时候要等好几秒。
+   做法：拦截菜单类链接 → fetch 新页面 HTML → 只把 <main> 里的内容原地换掉
+   （+ 重跑该页的脚本、更新地址栏），**不重新加载 CSS/JS/整页**，所以又快又不闪。
+   · 页面脚本用 new Function() 在函数作用域里跑：各页都有顶层 const（ST/CS/LS…），
+     直接 eval 会「重复声明」报错；放进函数体就互不干扰。
+   · 跑的时候顺带接管 setTimeout/setInterval/addEventListener，离开这一页时统一清掉，
+     避免定时器越堆越多（切来切去后一堆后台轮询会更慢）。
+   · 任何一步失败（网络错、结构不对）→ 兜底 location.href 真跳转，保证不会卡死。 */
+const PJ = { cache: new Map(), cleanup: [], pending: false };
+
+function pjIsPage(url) {
+  const path = String(url || '').split('?')[0].split('#')[0];
+  return path === '/' || ['/playlists', '/download', '/organize', '/trash', '/cloud', '/config'].indexOf(path) >= 0
+      || /^\/playlists\/\d+$/.test(path);
+}
+function pjPrefetch(url) {
+  if (!pjIsPage(url) || PJ.cache.has(url)) return;
+  try {
+    const p = fetch(url, {credentials: 'same-origin'}).then(function (r) {
+      if (!r.ok) throw new Error('HTTP ' + r.status);
+      return r.text();
+    });
+    p.catch(function () { PJ.cache.delete(url); });
+    PJ.cache.set(url, p);
+    if (PJ.cache.size > 6) {                       // 别无限攒
+      const first = PJ.cache.keys().next().value;
+      if (first !== url) PJ.cache.delete(first);
+    }
+  } catch (e) {}
+}
+/** 在函数作用域里跑页面脚本，并接管它创建的定时器/全局监听（离开本页时清理） */
+function pjRunScripts(doc) {
+  const codes = [];
+  Array.prototype.forEach.call(doc.querySelectorAll('script'), function (s) {
+    if (!s.id && !s.getAttribute('src') && s.textContent.trim()) codes.push(s.textContent);
+  });
+  if (!codes.length) return;
+  const docAdd = document.addEventListener.bind(document);
+  const winAdd = window.addEventListener.bind(window);
+  const setTO = window.setTimeout.bind(window);
+  const setIV = window.setInterval.bind(window);
+  const added = [], timers = [];
+  document.addEventListener = function (t, fn, o) { docAdd(t, fn, o); added.push([document, t, fn, o]); };
+  window.addEventListener = function (t, fn, o) { winAdd(t, fn, o); added.push([window, t, fn, o]); };
+  window.setTimeout = function () { const id = setTO.apply(null, arguments); timers.push(['t', id]); return id; };
+  window.setInterval = function () { const id = setIV.apply(null, arguments); timers.push(['i', id]); return id; };
+  try {
+    codes.forEach(function (code, i) {
+      try { new Function(code)(); }
+      catch (e) { console.error('[pj] 第 ' + i + ' 段页面脚本执行失败：', e); }
+    });
+  } finally {
+    document.addEventListener = docAdd;
+    window.addEventListener = winAdd;
+    window.setTimeout = setTO;
+    window.setInterval = setIV;
+  }
+  PJ.cleanup.push(function () {
+    added.forEach(function (a) { try { a[0].removeEventListener(a[1], a[2], a[3]); } catch (e) {} });
+    timers.forEach(function (x) { x[0] === 't' ? clearTimeout(x[1]) : clearInterval(x[1]); });
+  });
+}
+function pjSetNavByUrl(url) {
+  const path = String(url || '').split('?')[0];
+  let hit = null;
+  Array.prototype.forEach.call(document.querySelectorAll('.nav a'), function (a) {
+    const p = a.getAttribute('href');
+    if (p === path || (p === '/playlists' && path.indexOf('/playlists') === 0)) hit = a;
+  });
+  if (hit && !hit.classList.contains('active')) setNavActive(hit);
+  else if (!hit) placeNavGlass(false);
+}
+function pjSwap(html, url, push) {
+  const doc = new DOMParser().parseFromString(html, 'text/html');
+  const fresh = doc.querySelector('.main');
+  const cur = document.querySelector('.main');
+  if (!fresh || !cur) { location.href = url; return; }        // 结构不对 → 兜底真跳转
+  const apply = function () {
+    PJ.cleanup.forEach(function (fn) { try { fn(); } catch (e) {} });   // 先清上一页
+    PJ.cleanup = [];
+    cur.innerHTML = fresh.innerHTML;
+    document.title = doc.title;
+    pjRunScripts(doc);
+    window.scrollTo(0, 0);
+    pjSetNavByUrl(url);
+    if (push) history.pushState({ pj: 1 }, '', url);
+  };
+  if (document.startViewTransition) {
+    try { document.startViewTransition(apply); return; } catch (e) {}
+  }
+  apply();
+}
+async function pjGo(url, push) {
+  if (PJ.pending) return;
+  PJ.pending = true;
+  try {
+    let p = PJ.cache.get(url);
+    if (!p) {
+      p = fetch(url, {credentials: 'same-origin'}).then(function (r) {
+        if (!r.ok) throw new Error('HTTP ' + r.status);
+        return r.text();
+      });
+    }
+    const html = await p;
+    PJ.cache.delete(url);                       // 用一次就丢，下次拿新的（数据是实时的）
+    pjSwap(html, url, push);
+  } catch (e) {
+    location.href = url;                        // 兜底
+  } finally {
+    PJ.pending = false;
+  }
+}
+document.addEventListener('click', function (e) {
+  if (e.defaultPrevented || e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
+  const a = e.target.closest && e.target.closest('a[href]');
+  if (!a || a.target === '_blank' || a.hasAttribute('download')) return;
+  const href = a.getAttribute('href');
+  if (!href || href.charAt(0) !== '/' || !pjIsPage(href)) return;
+  e.preventDefault();
+  pjGo(href, true);
+});
+window.addEventListener('popstate', function () {
+  pjGo(location.pathname + location.search, false);
+});
 </script>
 {% block script %}{% endblock %}
 </body>

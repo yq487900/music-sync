@@ -173,7 +173,7 @@ function renderLocal(d) {
     <div class="trk">
       <span class="no"></span>
       ${t.has_cover && t.file
-          ? `<img class="cov" loading="lazy" alt="" src="/api/organize/cover?path=${encodeURIComponent(t.file)}&v=${t.mtime || 0}">`
+          ? `<img class="cov" loading="lazy" alt="" src="/cover?path=${encodeURIComponent(t.file)}&v=${t.mtime || 0}">`
           : phBox('ic-note')}
       <span class="meta">
         <strong>${esc(t.title || '未知曲目')}</strong>
@@ -230,7 +230,7 @@ function renderCloud(d) {
     <div class="trk row-click" data-sid="${esc(t.sid)}">
       <span class="no"><input type="checkbox" class="sel" title="勾选参与批量操作"></span>
       ${t.cover && t.has_cover
-          ? `<img class="cov" src="${esc(coverUrl(t.cover))}" alt="" loading="lazy"
+          ? `<img class="cov" src="${esc(coverUrl(t.cover, 160))}" alt="" loading="lazy"
                   onerror="covFail(this)">`
           : phBox('ic-no-cover', NO_INFO_TIP)}
       <span class="meta">
@@ -417,7 +417,7 @@ function bindCloudEdit(host, item) {
     cands.innerHTML = '<div class="cands">' + items.map((x, i) => `
       <div class="cand" data-i="${i}">
         ${x.cover
-          ? `<img class="cand-cov" src="${esc(coverUrl(x.cover))}" alt="" loading="lazy"
+          ? `<img class="cand-cov" src="${esc(coverUrl(x.cover, 160))}" alt="" loading="lazy"
                   referrerpolicy="no-referrer" onerror="covFail(this)">`
           : '<span class="cand-cov"></span>'}
         <strong>${esc(x.name)}</strong>

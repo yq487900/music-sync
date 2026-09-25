@@ -118,7 +118,7 @@ function render(d) {
       const ph = document.getElementById('cover-ph');
       if (ph) ph.style.display = '';
     };
-    img.src = coverUrl(d.cover); img.style.display = '';
+    img.src = coverUrl(d.cover, 320); img.style.display = '';
     document.getElementById('cover-ph').style.display = 'none';
   }
   SOURCES = d.sources || {};
@@ -136,7 +136,7 @@ function render(d) {
       <span class="no">
         <input type="checkbox" class="sel" ${t.selected ? 'checked' : ''} title="勾选参与批量下载">
       </span>
-      ${t.cover ? `<img class="cov" src="${esc(coverUrl(t.cover))}" alt="" loading="lazy"
+      ${t.cover ? `<img class="cov" src="${esc(coverUrl(t.cover, 160))}" alt="" loading="lazy"
                         onerror="covFail(this)">`
                 : phBox('ic-note')}
       <span class="meta">

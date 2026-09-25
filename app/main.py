@@ -1,10 +1,12 @@
 from fastapi import FastAPI, Form, Request
+from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
 from contextlib import asynccontextmanager
 import asyncio
 import base64
 import hashlib
+import io
 import ipaddress
 import json
 import math
@@ -154,6 +156,9 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title="MusicSync", lifespan=lifespan)
+# 页面 HTML 约 50~90KB、列表接口 JSON 也不小，手机端（微信 WebView）下载+解析都吃力；
+# gzip 后通常只剩 1/5（实测 /cloud 73.6KB → 约 12KB），菜单切换明显更快。
+app.add_middleware(GZipMiddleware, minimum_size=800)
 app.mount("/static", StaticFiles(directory="/app/app/static"), name="static")
 
 
@@ -167,6 +172,14 @@ async def no_store_api(request: Request, call_next):
     resp = await call_next(request)
     if request.url.path.startswith("/api/"):
         resp.headers["Cache-Control"] = "no-store"
+    elif request.url.path.startswith("/static/"):
+        # 静态资源：带 ?v= 的是「版本化」资源（改了必换号）→ 可以长期强缓存，
+        # 这样手机端每次切页不用再重新下载 CSS（56KB）；不带版本的（图标/manifest）
+        # 只短缓存，避免改了看不到。
+        if request.query_params.get("v"):
+            resp.headers["Cache-Control"] = "public, max-age=2592000, immutable"
+        else:
+            resp.headers["Cache-Control"] = "public, max-age=600"
     elif str(resp.headers.get("content-type") or "").startswith("text/html"):
         resp.headers["Cache-Control"] = "no-cache, must-revalidate"
     return resp
@@ -2206,17 +2219,95 @@ async def api_org_scrape(request: Request):
     return res
 
 
+# ------------------------------------------------------------- 本地内嵌封面：缩略 + 落盘缓存
+COVER_CACHE_DIR = Path("/data/cover_cache")
+COVER_CACHE_KEEP = 3000        # 缓存文件数上限
+COVER_PX = 200                 # 列表里封面只有 42~44px，2~3 倍屏下 200px 足够
+
+
+def _cover_cache_trim() -> None:
+    """缓存目录只保留最近 COVER_CACHE_KEEP 张，避免无限膨胀"""
+    try:
+        files = list(COVER_CACHE_DIR.glob("*.jpg"))
+        if len(files) <= COVER_CACHE_KEEP:
+            return
+        files.sort(key=lambda p: p.stat().st_mtime)
+        for p in files[:len(files) - COVER_CACHE_KEEP]:
+            p.unlink(missing_ok=True)
+    except OSError:
+        pass
+
+
+def _cover_thumb(p: Path, px: int = COVER_PX) -> Optional[bytes]:
+    """取内嵌封面 → 缩成小图 → 按 (路径+mtime+大小) 落盘缓存。
+
+    为什么必须缩：内嵌封面是**原始大图**（实测单张 1.4MB），而列表里只显示 42~44px，
+    云盘页 20 行本地封面一次就能是几十 MB —— 手机端「点菜单要等几秒」的主因。
+    缩完通常 20KB 上下（差 50 倍以上）；文件一改 mtime 就变，缓存自然失效。
+    """
+    raw = organize.current_cover(p)
+    if not raw:
+        return None
+    cache = None
+    try:
+        st = p.stat()
+        key = hashlib.sha1(f"{p}|{int(st.st_mtime)}|{st.st_size}|{px}".encode()).hexdigest()
+        cache = COVER_CACHE_DIR / (key + ".jpg")
+        if cache.exists():                       # 命中缓存：不重复解码
+            return cache.read_bytes()
+    except OSError:
+        cache = None
+    try:
+        from PIL import Image                    # 懒加载：没装也不影响其它功能
+        im = Image.open(io.BytesIO(raw)).convert("RGB")
+        im.thumbnail((px, px), Image.LANCZOS)
+        buf = io.BytesIO()
+        im.save(buf, "JPEG", quality=86, optimize=True)
+        data = buf.getvalue()
+    except Exception:  # noqa: BLE001 —— 缩图失败就发原图，别让封面直接消失
+        return raw
+    if cache is not None:
+        try:
+            COVER_CACHE_DIR.mkdir(parents=True, exist_ok=True)
+            cache.write_bytes(data)
+            _cover_cache_trim()
+        except OSError:
+            pass
+    return data
+
+
 @app.get("/api/organize/cover")
 async def api_org_cover(path: str):
-    """返回文件内嵌封面（列表缩略图用）"""
+    """返回文件内嵌封面（列表缩略图用；已缩略 + 落盘缓存，见 _cover_thumb）"""
     p = _safe_music_path(path)
     if p is None or not p.exists():
         return Response(status_code=404)
-    data = organize.current_cover(p)
+    data = await asyncio.to_thread(_cover_thumb, p)
     if not data:
         return Response(status_code=404)
     return Response(content=data, media_type=("image/png" if data[:8] == b"\x89PNG\r\n\x1a\n"
                                               else "image/jpeg"))
+
+
+@app.get("/cover")
+async def local_cover(path: str, v: str = ""):
+    """本地曲库封面（列表缩略图）—— 列表页面专用，可被浏览器长缓存。
+
+    ★ 故意**不放在 /api/ 下**：`no_store_api` 中间件把 /api/ 全部强制 no-store，
+    封面图会被「每次翻页重新下载」（实测内嵌封面单张 1.4MB，云盘页 20 行本地封面
+    一次导航就要下几十 MB —— 手机端「点菜单要等几秒」的主因）。
+    URL 里带 `v=<文件 mtime>`：文件一改 mtime 就变 → 天然版本化，
+    所以这里可以直接 immutable 长缓存，切页时封面全部命中本地缓存、0 请求。
+    """
+    p = _safe_music_path(path)
+    if p is None or not p.exists():
+        return Response(status_code=404)
+    data = await asyncio.to_thread(_cover_thumb, p)
+    if not data:
+        return Response(status_code=404)
+    ct = "image/png" if data[:8] == b"\x89PNG\r\n\x1a\n" else "image/jpeg"
+    return Response(content=data, media_type=ct,
+                    headers={"Cache-Control": "public, max-age=604800, immutable"})
 
 
 # ------------------------------------------------------------- 外链图片代理
@@ -2241,11 +2332,12 @@ def _img_cache_trim() -> None:
         pass
 
 
-def _img_shrink(u: str) -> str:
+def _img_shrink(u: str, px: int = 240) -> str:
     """网易云 CDN 支持 ?param=WxH 取缩略图。
 
-    实测同一张封面：原图 1.5MB，240×240 只有 19KB —— 相差 80 倍。
-    列表里封面最大也就 148px，在 2~3 倍屏下 240px 足够，没必要把原图搬给手机。
+    实测同一张封面：原图 1.3MB，240×240 只有 128KB，180×180 只有 72KB。
+    尺寸由调用方按显示大小给（列表封面只有 42px → 160 就够，大封面 240~320），
+    统一 240 是浪费：列表一屏 20 张，每张多一半流量就是多几百 KB。
     """
     try:
         parts = urlsplit(u)
@@ -2254,11 +2346,26 @@ def _img_shrink(u: str) -> str:
     host = (parts.hostname or "").lower()
     if not host.endswith(".music.126.net") or "param=" in (parts.query or ""):
         return u
-    return u + ("&" if parts.query else "?") + "param=240y240"
+    return u + ("&" if parts.query else "?") + f"param={px}y{px}"
+
+
+def _canon_img_url(u: str) -> str:
+    """把网易云图片 CDN 的**轮换主机**（p1~p4.music.126.net）统一成 p1。
+
+    实测同一张封面两次请求可能给不同主机（p3 → p4）：URL 一变，浏览器缓存和本地磁盘
+    缓存就都命中不了，手机端每切一次页都要重新下载几十上百 KB（页面上有几十张封面时
+    就是几 MB）。这几个主机是等价镜像，统一后缓存才真正生效。
+    """
+    for host in ("p2", "p3", "p4"):
+        for scheme in ("https://", "http://"):
+            pre = f"{scheme}{host}.music.126.net/"
+            if u.startswith(pre):
+                return scheme + "p1.music.126.net/" + u[len(pre):]
+    return u
 
 
 @app.get("/img")
-async def img_proxy(u: str):
+async def img_proxy(u: str, px: int = 240):
     """外链图片（封面）的本地代理：服务端取图 + 缩略 + 本地缓存
 
     为什么不让浏览器直连：网易云 CDN 给的封面是 `http://p*.music.126.net/...`，
@@ -2266,8 +2373,15 @@ async def img_proxy(u: str):
     显示成破图/问号，电脑端却正常。这里由 NAS 去取图、页面只连本机 ——
     手机端不再依赖「手机能不能直连网易云 CDN」；顺带做缩略图 + 本地缓存，
     同一张封面只打一次外网，手机拿到的也是十几 KB 的小图。
+
+    `px`：期望边长（前端按显示尺寸给：列表封面 160、大封面 320）。范围 64~480，
+    缩略结果按 (URL+尺寸) 分别缓存，所以同一条目在不同场景可以用不同清晰度。
     """
-    raw = str(u or "").strip()
+    try:
+        px = max(64, min(480, int(px)))
+    except (TypeError, ValueError):
+        px = 240
+    raw = _canon_img_url(str(u or "").strip())
     parts = urlsplit(raw)
     if parts.scheme not in ("http", "https") or not parts.hostname:
         return Response(status_code=400)
@@ -2285,7 +2399,7 @@ async def img_proxy(u: str):
                 or ip.is_reserved or ip.is_multicast or ip.is_unspecified):
             return Response(status_code=403)
 
-    fetch = _img_shrink(raw)
+    fetch = _img_shrink(raw, px)
     key = hashlib.sha1(fetch.encode("utf-8")).hexdigest()
     bin_path = IMG_CACHE_DIR / (key + ".bin")
     meta_path = IMG_CACHE_DIR / (key + ".json")

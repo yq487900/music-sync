@@ -265,7 +265,7 @@ function orgCloudCell(t) {
 
 function rowHtml(card, t, i) {
   const cover = t.has_cover
-    ? `<img class="cov" loading="lazy" alt="" src="/api/organize/cover?path=${encodeURIComponent(t.path)}&v=${t.mtime}">`
+    ? `<img class="cov" loading="lazy" alt="" src="/cover?path=${encodeURIComponent(t.path)}&v=${t.mtime}">`
     : phBox('ic-note');
   const sub = [t.artist, t.album, t.duration ? fmtDur(t.duration) : '', fmtSize(t.size)]
     .filter(Boolean).join(' · ');
@@ -452,7 +452,7 @@ function bindEditor(panel, it) {
       coverUrl = p.cover_url;
       coverData = '';
       panel.querySelector('#e-cover').innerHTML =
-        `<img src="${esc(coverUrl(p.cover_url))}" alt="" referrerpolicy="no-referrer"
+        `<img src="${esc(coverUrl(p.cover_url, 160))}" alt="" referrerpolicy="no-referrer"
               onerror="covFailBig(this)">`;
     }
   };
@@ -566,7 +566,7 @@ function renderCands(panel, list, fill) {
   box.innerHTML = '<div class="cands">' + list.map((c, i) => `
     <div class="cand" data-i="${i}">
       ${c.cover
-        ? `<img class="cand-cov" src="${esc(coverUrl(c.cover))}" alt="" loading="lazy"
+        ? `<img class="cand-cov" src="${esc(coverUrl(c.cover, 160))}" alt="" loading="lazy"
                 referrerpolicy="no-referrer" onerror="covFail(this)">`
         : '<span class="cand-cov"></span>'}
       <strong>${esc(c.name)}</strong>
