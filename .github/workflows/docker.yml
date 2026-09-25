@@ -59,12 +59,45 @@ jobs:
     permissions:
       contents: write
     steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0        # 需要历史：用来列出「上一版 → 本版」包含的提交
+
+      - name: 生成中文更新说明
+        run: |
+          set -e
+          TAG="${GITHUB_REF_NAME}"
+          # 上一个 tag（用于列提交区间）；第一个 tag 时为空，跳过该段
+          PREV=$(git describe --tags --abbrev=0 "${TAG}^" 2>/dev/null || true)
+          {
+            echo "## MusicSync ${TAG}"
+            echo
+            echo "### 本版更新"
+            echo
+            # 打这个 tag 的那条提交说明（发版时用中文分条写好，这里直接引用）
+            git log -1 --pretty=%B "${TAG}"
+            echo
+            if [ -n "${PREV}" ]; then
+              echo "### 本版包含的提交（${PREV} → ${TAG}）"
+              echo
+              git log --no-merges --pretty='- %s' "${PREV}..${TAG}"
+              echo
+            fi
+            echo "---"
+            echo
+            echo "- 镜像：\`ghcr.io/${{ github.repository_owner }}/music-sync:${TAG#v}\`（\`latest\` 同步更新）"
+            echo "- 架构：linux/amd64 ｜ 提交：\`${GITHUB_SHA::7}\`"
+          } > release_notes.md
+          cat release_notes.md
+
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ github.ref_name }}
           name: MusicSync ${{ github.ref_name }}
-          # 自动按 commit 生成更新内容（原来这里写死一大段，每次发版都一模一样）
-          generate_release_notes: true
+          # ★ 说明一律中文：由上面那步从「打 tag 的提交说明 + 上一版以来的提交列表」生成。
+          # 不要开 generate_release_notes —— 它会生成英文的 "Full Changelog"，没人看得懂。
+          body_path: release_notes.md
+          generate_release_notes: false
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
