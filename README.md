@@ -151,8 +151,8 @@ docker compose down       # 停止（保留数据卷）
 
 ## 更新
 
-`ncm-api` 由 Dockerfile 固定版本号安装（当前 `4.40.1`）。上游接口变动导致失效时，
-改 Dockerfile 里的版本号后重新构建即可。
+`ncm-api` 由 Dockerfile 固定版本号安装（当前 `4.41.1`，由 build-arg `NCM_API_VERSION` 控制）。上游接口变动导致失效时，
+改 Dockerfile 里的 `ARG NCM_API_VERSION` 后重新构建即可。
 
 ## ⚠️ 使用须知（重要）
 

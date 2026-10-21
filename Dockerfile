@@ -9,6 +9,8 @@ LABEL org.opencontainers.image.title="MusicSync" \
 # 构建期镜像源（本机 pypi.org 不可达；换源可覆盖，如 --build-arg PIP_INDEX=https://pypi.org/simple）
 ARG PIP_INDEX=https://pypi.tuna.tsinghua.edu.cn/simple
 ARG NPM_REGISTRY=https://registry.npmmirror.com
+# 内置网易云接口服务的版本（以后升级只改这一行；可用 --build-arg 临时覆盖）
+ARG NCM_API_VERSION=4.41.1
 
 # Python 与运行时依赖（Debian 12 → Python 3.11）
 RUN apt-get update && apt-get install -y --no-install-recommends \
@@ -21,7 +23,7 @@ ENV PATH="/opt/venv/bin:$PATH"
 RUN mkdir -p /opt/ncm-api \
     && cd /opt/ncm-api \
     && npm install --omit=dev --no-audit --no-fund --registry="$NPM_REGISTRY" \
-         @neteasecloudmusicapienhanced/api@4.40.1 \
+         "@neteasecloudmusicapienhanced/api@${NCM_API_VERSION}" \
     && npm cache clean --force
 
 WORKDIR /app

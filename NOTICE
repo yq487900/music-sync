@@ -4,7 +4,7 @@
 
 | 组件 | 用途 | 许可证 | 说明 |
 |---|---|---|---|
-| [@neteasecloudmusicapienhanced/api](https://github.com/neteasecloudmusicapienhanced/api) 4.40.1 | 网易云音乐接口中转（签名/加密） | MIT | 构建镜像时通过 npm 安装，未修改源码 |
+| [@neteasecloudmusicapienhanced/api](https://github.com/neteasecloudmusicapienhanced/api) 4.41.1 | 网易云音乐接口中转（签名/加密） | MIT | 构建镜像时通过 npm 安装，未修改源码 |
 | [FFmpeg](https://ffmpeg.org/)（Debian 包 5.1.9） | 音频时长/格式处理 | LGPL/GPL | 来自 Debian 官方软件包 |
 | Node.js、Python、Supervisor | 运行时 | MIT / PSF / BSD | 来自官方镜像与 Debian 软件包 |
 
