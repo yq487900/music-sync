@@ -33,8 +33,13 @@ RUN pip install --no-cache-dir -i "$PIP_INDEX" -r requirements.txt
 
 COPY app/ ./app
 COPY sources/ ./sources
+# 自测脚本与文档一并打进镜像：容器内可直接 `python /app/tests/verify_check.py --self-test`
+# 之类做独立验证，不用再从宿主机 docker cp（tests/ 里没有任何自动执行的东西）
+COPY tests/ ./tests
+COPY docs/ ./docs
 COPY supervisord.conf entrypoint.sh /app/
-RUN chmod +x /app/entrypoint.sh
+RUN chmod +x /app/entrypoint.sh \
+    && echo "$NCM_API_VERSION" > /app/.ncm_builtin_version
 
 ENV APP_PORT=13570 \
     NCM_API=http://127.0.0.1:3000 \

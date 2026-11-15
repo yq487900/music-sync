@@ -8,13 +8,15 @@
 #   ./tests/run.sh up     上传成功后立刻登记云盘索引（不碰真实云盘）
 #   ./tests/run.sh mon    歌单监控的判定逻辑（不联网、不写真实库）
 #   ./tests/run.sh pl     歌单索引（在不在歌单里 / 新歌判定）
+#   ./tests/run.sh vf     下载一致性校验（离线自测：文本规则 + 合成音频，不联网）
 #   ./tests/run.sh all    全部
 cd "$(dirname "$0")/.." || exit 1
 
 run_one() {
     local file="$1"
+    shift
     docker cp "tests/$file" "music-sync:/tmp/$file" >/dev/null || return 1
-    docker exec music-sync python "/tmp/$file"
+    docker exec music-sync python "/tmp/$file" "$@"
 }
 
 case "${1:-core}" in
@@ -25,8 +27,10 @@ case "${1:-core}" in
     up)  run_one upload_test.py ;;
     mon) run_one monitor_test.py ;;
     pl)  run_one playlist_index_test.py ;;
+    vf)  run_one verify_check.py --self-test ;;
     all) run_one selftest.py && run_one lxselftest.py && run_one cloud_index_test.py \
          && run_one calibrate_test.py && run_one upload_test.py && run_one monitor_test.py \
-         && run_one playlist_index_test.py && bash tests/organize_test.sh ;;
+         && run_one playlist_index_test.py && run_one verify_check.py --self-test \
+         && bash tests/organize_test.sh ;;
     *)   run_one selftest.py ;;
 esac

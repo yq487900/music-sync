@@ -6,6 +6,8 @@ aiofiles==25.1.0
 aiohttp==3.14.3
 mutagen==1.48.1
 tinytag==2.3.2
+# 下载一致性校验的音频特征计算（梅尔谱/自相关/MFCC）；ffmpeg 由 Dockerfile 的 apt 层提供
+numpy==2.4.6
 pydantic==2.13.5
 python-multipart==0.0.32
 jinja2==3.1.6

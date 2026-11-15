@@ -278,6 +278,30 @@
   </details>
 </div>
 
+<div class="card" id="ncm-api">
+  <h2>网易云接口服务 <span class="pill" id="ncm-pill"><span class="dot-i"></span>读取中</span></h2>
+  <p class="sub">
+    内置的 ncm-api 负责所有网易云请求的签名与加密（登录、歌单、取播放地址、云盘都走它）。<br>
+    上游接口变动时用它检查并升级：<b>只重启这一个进程</b>，不重建容器、不影响 Web 界面与整理功能。
+  </p>
+
+  <div class="kv">
+    <div class="k">当前版本</div><div class="v" id="ncm-current">—</div>
+    <div class="k">最新版本</div><div class="v" id="ncm-latest">—</div>
+    <div class="k">上次检查</div><div class="v" id="ncm-checked">—</div>
+  </div>
+
+  <div class="btn-row" style="margin-top:14px">
+    <button class="btn sm" id="btn-ncm-check"><svg><use href="#ic-refresh"/></svg>检查更新</button>
+    <button class="btn sm primary" id="btn-ncm-upgrade" disabled><svg><use href="#ic-down"/></svg>更新到最新</button>
+    <label class="hint" style="align-self:center;display:flex;gap:6px;align-items:center;cursor:pointer">
+      <input type="checkbox" id="ncm-auto" style="width:auto;margin:0"> 发现新版本自动更新（队列空闲时才升）
+    </label>
+  </div>
+  <div class="hint" id="ncm-msg" style="margin-top:10px"></div>
+  <pre class="hint" id="ncm-log" style="margin-top:8px;white-space:pre-wrap;display:none"></pre>
+</div>
+
 {% endblock %}
 
 {% block script %}
@@ -677,6 +701,99 @@ document.getElementById('btn-src-add').onclick = async (e) => {
 };
 
 loadSources();
+
+/* ---------------- 内置接口服务（ncm-api）版本监控 ---------------- */
+const NCM = { st: null, timer: null };
+function ncmRender(d) {
+  NCM.st = d;
+  const $ = id => document.getElementById(id);
+  $('ncm-current').textContent = d.current || '读取失败';
+  $('ncm-latest').textContent = d.latest || '—';
+  $('ncm-checked').textContent = d.checked_at || '还没检查过';
+  const pill = $('ncm-pill'), btn = $('btn-ncm-upgrade'), msg = $('ncm-msg');
+  if (d.upgrading) {
+    pill.className = 'pill warn';
+    pill.innerHTML = '<span class="dot-i"></span>更新中';
+    msg.textContent = (d.stage ? '正在' : '正在更新') + (d.stage || '') + '…';
+  } else if (d.has_update) {
+    pill.className = 'pill warn';
+    pill.innerHTML = '<span class="dot-i"></span>有新版本 ' + d.latest;
+    msg.textContent = '当前 ' + d.current + ' → 可更新到 ' + d.latest
+      + (d.latest_published ? '（发布于 ' + String(d.latest_published).slice(0, 10) + '）' : '');
+  } else if (d.last_error) {
+    pill.className = 'pill';
+    pill.innerHTML = '<span class="dot-i"></span>检查失败';
+    msg.textContent = '检查失败：' + d.last_error;
+  } else {
+    pill.className = 'pill';
+    pill.innerHTML = '<span class="dot-i"></span>已是最新';
+    msg.textContent = '';
+  }
+  btn.disabled = !d.has_update || d.upgrading || d.checking;
+  if (d.has_update && d.latest) btn.innerHTML = '<svg><use href="#ic-down"/></svg>更新到 ' + d.latest;
+  $('ncm-auto').checked = !!d.auto_update;
+  const log = $('ncm-log');
+  if (d.log && d.log.length) { log.style.display = 'block'; log.textContent = d.log.join('\n'); }
+}
+async function ncmLoad() {
+  const r = await jsonReq('/api/ncm/version');
+  if (r.ok && r.data && !r.data.error) ncmRender(r.data);
+}
+document.getElementById('ncm-api').addEventListener('click', e => {
+  const t = e.target.closest('#btn-ncm-check, #btn-ncm-upgrade');
+  if (!t) return;
+  if (t.id === 'btn-ncm-check') ncmCheck(t);
+  else ncmUpgrade(t);
+});
+async function ncmCheck(btn) {
+  setBusy(btn, true);
+  const r = await jsonReq('/api/ncm/check', 'POST', {});
+  setBusy(btn, false);
+  if (!r.ok || !r.data) { toast('检查失败', 'err'); return; }
+  if (r.data.error) { toast('检查失败：' + r.data.error, 'err'); return; }
+  ncmRender(r.data);
+  toast(r.data.has_update ? ('发现新版本 ' + r.data.latest) : '已是最新版本', 'ok');
+}
+async function ncmUpgrade(btn) {
+  const st = NCM.st || {};
+  if (!confirm('更新会重启接口服务（约 10~60 秒），期间正在下载/上传的任务会失败。\n建议空闲时更新。继续？')) return;
+  setBusy(btn, true);
+  const r = await jsonReq('/api/ncm/upgrade', 'POST', {version: st.latest || ''});
+  setBusy(btn, false);
+  if (!r.ok || (r.data && r.data.error)) {
+    toast((r.data && r.data.error) || '启动更新失败', 'err');
+    return;
+  }
+  toast('开始更新到 ' + r.data.target + '…');
+  ncmPoll(true);
+}
+document.getElementById('ncm-auto').onchange = async (e) => {
+  const r = await jsonReq('/api/ncm/auto', 'POST', {enabled: e.target.checked});
+  if (!r.ok || !r.data || r.data.error) {
+    toast((r.data && r.data.error) || '保存失败', 'err');
+    e.target.checked = !e.target.checked;
+    return;
+  }
+  toast(e.target.checked ? '已开启自动更新（队列空闲时才会升）' : '已关闭自动更新', 'ok');
+  ncmRender(r.data);
+};
+function ncmPoll(fresh) {
+  if (NCM.timer) { clearInterval(NCM.timer); NCM.timer = null; }
+  if (!fresh) return;
+  NCM.timer = setInterval(async () => {
+    const r = await jsonReq('/api/ncm/version');
+    if (!r.ok || !r.data) return;
+    ncmRender(r.data);
+    if (!r.data.upgrading) {
+      clearInterval(NCM.timer); NCM.timer = null;
+      const lr = r.data.last_result || {};
+      if (lr.ok === false) toast('更新失败：' + (lr.error || '未知原因'), 'err');
+      else if (lr.ok === true) toast('更新完成：' + (r.data.current || ''), 'ok');
+    }
+  }, 2000);
+}
+ncmLoad();
+
 {% if not cfg.platforms.netease.cookie %}gen();{% endif %}
 </script>
 {% endblock %}

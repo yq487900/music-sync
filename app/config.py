@@ -47,6 +47,38 @@ DEFAULT: Dict[str, Any] = {
     # 歌单监控：on=开关；mode=new 从现在开始监控 / full 全量扫描补齐后再监控
     "monitor": {"on": False, "mode": "new", "since": 0, "batch": 20, "interval": 2, "token": "",
                 "last_run": "", "last_result": {}},
+    # 下载一致性校验（下载与整理之间的强制关口，实现见 app/verify.py）：
+    #   items                要比对的项：duration 时长 / artist 演唱者 / album 所属专辑
+    #                        / bgm 音乐 bgm / voiceprint 歌手声纹
+    #   on_missing_reference 拿不到网易云官方播放流时音频项的处理：skip 跳过不算失败（默认）/ fail 算失败
+    #   only_third_party     只校验第三方音源下载的曲目（官方直链下载内容天然一致，跳过省时间）
+    #   keep_failed          校验不通过时把文件留到 /data/verify_failed/（排查误报用）
+    "verify": {
+        "enabled": True,
+        "items": ["duration", "artist", "album", "bgm", "voiceprint"],
+        "duration_tolerance": 2.0,
+        "album_threshold": 0.82,
+        "bgm_threshold": 0.80,
+        "voiceprint_threshold": 0.62,
+        "pitch_tolerance": 0.06,
+        "on_missing_reference": "skip",
+        "only_third_party": False,
+        "keep_failed": False,
+    },
+    # 内置网易云接口服务（ncm-api）的版本监控与热更新，实现见 app/ncm_upgrade.py：
+    #   auto_update       发现新版本后自动升级（默认关；开之前建议先手动升一次看看）
+    #   check_hours       自动检查间隔（小时）
+    #   installed_version 热更新后的版本号；entrypoint.sh 启动时按它把版本装回来，
+    #                     所以容器重建 / 镜像升级都不会丢热更新（空=跟随镜像内置版本）
+    "ncm_api": {
+        "auto_update": False,
+        "check_hours": 24,
+        "installed_version": "",
+        "last_check": "",
+        "latest": "",
+        "latest_published": "",
+        "last_error": "",
+    },
     # 曲库整理
     "organize": {"batch": 20},      # 一键批量刮削每轮处理的文件数
 }
@@ -105,6 +137,18 @@ def load() -> Dict[str, Any]:
     if not isinstance(cfg.get("monitor"), dict):
         cfg["monitor"] = {"on": False, "mode": "new", "since": 0, "batch": 20}
         cfg["monitor"].setdefault("interval", 2)
+    # 下载一致性校验：老配置没有这一段时整体补上；是字典时按默认值补缺项
+    if not isinstance(cfg.get("verify"), dict):
+        cfg["verify"] = dict(DEFAULT["verify"])
+    else:
+        for k, v in DEFAULT["verify"].items():
+            cfg["verify"].setdefault(k, v)
+    # 内置接口服务的版本状态（老配置没有这一段时整体补上）
+    if not isinstance(cfg.get("ncm_api"), dict):
+        cfg["ncm_api"] = dict(DEFAULT["ncm_api"])
+    else:
+        for k, v in DEFAULT["ncm_api"].items():
+            cfg["ncm_api"].setdefault(k, v)
     cfg["monitor"].setdefault("on", False)
     cfg["monitor"].setdefault("mode", "new")
     cfg["monitor"].setdefault("since", 0)

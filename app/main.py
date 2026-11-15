@@ -847,7 +847,109 @@ def _track_view(t: Track, cfg: dict) -> dict:
         "downloaded": bool(t.downloaded),
         # 本地有没有这个文件（下载成功且有落盘路径）
         "local": bool(t.status == "ok" and _is_local_file(t.file_path)),
+        # 下载一致性校验的结论（明细走 /api/verify/report?track_id=）
+        "verify_state": t.verify_state or "",
     }
+
+
+@app.get("/api/verify/report")
+async def api_verify_report(track_id: int):
+    """某首曲目的下载一致性校验明细（下载与整理之间的那道关口，见 docs/一致性校验.md）"""
+    db = SessionLocal()
+    try:
+        tr = db.query(Track).filter_by(id=int(track_id)).first()
+        if tr is None:
+            return JSONResponse({"error": "曲目不存在"}, status_code=404)
+        rep = tr.verify_report if isinstance(tr.verify_report, dict) else {}
+        return {"track_id": tr.id, "sid": tr.platform_track_id, "title": tr.title,
+                "artist": tr.artist, "state": tr.verify_state or "",
+                "verified_at": tr.verify_at or "", "report": rep}
+    finally:
+        db.close()
+
+
+@app.get("/api/ncm/version")
+async def api_ncm_version():
+    """内置网易云接口服务（ncm-api）的版本状态：当前 / 最新 / 是否有更新 / 上次检查时间"""
+    from app import ncm_upgrade
+    return await ncm_upgrade.status()
+
+
+@app.post("/api/ncm/check")
+async def api_ncm_check():
+    """立即去 npm registry 查一次最新版本（配置页「检查更新」按钮）"""
+    from app import ncm_upgrade
+    return await ncm_upgrade.check(force=True)
+
+
+@app.post("/api/ncm/upgrade")
+async def api_ncm_upgrade(request: Request):
+    """热更新 ncm-api：容器内 npm install + 重打补丁 + 只重启 ncm-api 进程。
+
+    body: {version?: "4.42.0", force?: bool}
+    队列正忙时默认拒绝（重启会让正在下的歌失败），force=true 可强行更新。
+    """
+    from app import ncm_upgrade
+    body = {}
+    try:
+        body = await request.json()
+    except Exception:  # noqa: BLE001
+        body = {}
+    if ncm_upgrade.STATE["upgrading"]:
+        return JSONResponse({"error": "正在更新中，请稍候"}, status_code=409)
+    version = str(body.get("version") or "").strip()
+    if not version:
+        st = await ncm_upgrade.status()
+        version = str(st.get("latest") or "")
+    if not version:
+        return JSONResponse({"error": "还没检测到最新版本，请先点「检查更新」"}, status_code=400)
+    cur = ncm_upgrade.installed_version()
+    if ncm_upgrade._ver_tuple(version) == ncm_upgrade._ver_tuple(cur):
+        return JSONResponse({"error": f"当前已经是 {cur}"}, status_code=400)
+
+    # 队列忙的时候别折腾 ncm-api（重启期间 3000 端口不可用）
+    if not bool(body.get("force")):
+        try:
+            from app import runner as _runner
+            snap = _runner.snapshot() or {}
+            busy = sum(int((snap.get(k) or {}).get("active") or 0) + int((snap.get(k) or {}).get("queued") or 0)
+                       for k in ("download", "upload"))
+        except Exception:   # noqa: BLE001
+            busy = 0
+        if busy:
+            return JSONResponse({"error": f"还有 {busy} 个下载/上传任务在跑，"
+                                          f"更新会重启接口服务导致它们失败。稍后再试，或加 force 强制更新",
+                                 "busy": busy}, status_code=409)
+
+    asyncio.create_task(ncm_upgrade.upgrade(version))
+    return {"started": True, "target": version, "from": cur}
+
+
+@app.post("/api/ncm/auto")
+async def api_ncm_auto(request: Request):
+    """开关「发现新版本自动更新」，顺便可改检查间隔（小时）"""
+    from app import ncm_upgrade
+    body = {}
+    try:
+        body = await request.json()
+    except Exception:  # noqa: BLE001
+        body = {}
+    kw = {}
+    if "enabled" in body:
+        kw["auto_update"] = bool(body.get("enabled"))
+    if body.get("check_hours") is not None:
+        try:
+            kw["check_hours"] = max(1, min(168, int(body["check_hours"])))
+        except (TypeError, ValueError):
+            return JSONResponse({"error": "检查间隔不合法"}, status_code=400)
+    if kw:
+        ncm_upgrade._save_cfg(**kw)
+        try:                                  # 间隔变了 → 重排定时任务，立即生效
+            from app import scheduler as sch
+            sch.reschedule()
+        except Exception:   # noqa: BLE001
+            pass
+    return await ncm_upgrade.status()
 
 
 @app.post("/api/playlists/{pid}/select")

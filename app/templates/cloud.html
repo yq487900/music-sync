@@ -221,6 +221,8 @@ async function loadLocal() {
 function renderCloud(d) {
   const box = document.getElementById('cloud-list');
   const pager = document.getElementById('cloud-pager');
+  // pjax 局部切页瞬间：轮询已拿到数据，但 <main> 还没换成云盘页的 DOM
+  if (!box || !pager) return;
   if (!d.items.length) {
     box.innerHTML = '<div class="empty"><div class="big">☁️</div>云盘还是空的</div>';
     pager.style.display = 'none';

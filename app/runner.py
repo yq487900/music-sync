@@ -99,6 +99,10 @@ async def _download_runner(task: Task, cfg: Dict[str, Any]) -> None:
             task.fail(res.get("reason") or "下载失败")
             return
         task.done_with(source=res.get("source") or "", level=res.get("level") or "")
+        # 一致性校验的结论也写进队列备注（通过/跳过都要让用户看得见）
+        vr = res.get("verify_report") or {}
+        if isinstance(vr, dict) and vr.get("summary"):
+            _task_note(task, str(vr["summary"]))
         # 元数据已齐全（下载时已写入官方 歌名/歌手/专辑/封面/歌词 + 网易云 id）
         # → 自动归档进「整理后」，不用再手动刮削一次
         if bool(((cfg.get("library") or {}).get("auto_archive", True))):

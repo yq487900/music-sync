@@ -155,8 +155,32 @@ def reschedule() -> list:
                       replace_existing=True, next_run_time=now + datetime.timedelta(seconds=15))
     scheduler.add_job(refresh_cloud_index, "interval", minutes=10, id="cloud_index",
                       replace_existing=True, next_run_time=now + datetime.timedelta(seconds=20))
+    # 内置网易云接口服务（ncm-api）的新版本检查：按配置间隔跑（默认 24h）。
+    # 启动 2 分钟后先查一次，这样刚部署完就能在配置页看到「有没有新版本」。
+    # 开了 auto_update 时，发现新版且队列空闲会自动升级（见 ncm_upgrade.auto_tick）。
+    ncm = cfg.get("ncm_api") or {}
+    try:
+        ncm_hours = max(1, min(168, int(ncm.get("check_hours") or 24)))
+    except (TypeError, ValueError):
+        ncm_hours = 24
+    try:
+        scheduler.remove_job("ncm_version_check")
+    except Exception:  # noqa: BLE001
+        pass
+    scheduler.add_job(auto_check_ncm_version, "interval", hours=ncm_hours, id="ncm_version_check",
+                      replace_existing=True, next_run_time=now + datetime.timedelta(minutes=2))
     # next_run_time 仅在调度器启动后才有值
     return [(j.id, str(getattr(j, "next_run_time", None) or "-")) for j in scheduler.get_jobs()]
+
+
+async def auto_check_ncm_version() -> None:
+    """定时检查内置接口服务是否有新版本；开了自动更新时在队列空闲时升级"""
+    from app import ncm_upgrade
+    try:
+        r = await ncm_upgrade.auto_tick()
+        print(f"[ncm_version] {r}", flush=True)
+    except Exception as e:  # noqa: BLE001
+        print(f"[ncm_version] 异常: {type(e).__name__}: {e}", flush=True)
 
 
 async def refresh_cloud_index() -> None:

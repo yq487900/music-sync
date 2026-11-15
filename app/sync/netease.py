@@ -21,6 +21,7 @@ from app.nfo import write_album_nfo, write_song_nfo
 from app.quality import chain_from, pick_level, rank
 from app.queue import Canceled
 from app.tagger import read_track_number, song_relative_path, tag_file
+from app.verify import log_report, verify_cfg, verify_file
 
 TMP_DIR = Path("/data/tmp")
 Progress = Optional[Callable[[str, str, Optional[int], Optional[int]], None]]
@@ -99,6 +100,36 @@ def _meta_of_track(tr: Track) -> Dict[str, Any]:
         "pic_url": tr.pic_url or "", "track": tr.track_no or 0, "disc": tr.disc or 0,
         "date": "", "playlist": tr.album or "未命名歌单", "pos": 0, "sid": sid,
     }
+
+
+def _ref_artists(detail: Dict[str, Any], meta: Dict[str, Any]) -> List[str]:
+    """网易云的歌手名列表（一致性校验的基准）；详情缺失时退回拼接串"""
+    out: List[str] = []
+    src = (detail.get("ar") or detail.get("artists") or []) if isinstance(detail, dict) else []
+    for a in src:
+        if isinstance(a, dict) and a.get("name"):
+            out.append(str(a["name"]))
+    if not out:
+        out = [x.strip() for x in str(meta.get("artist") or "").split(" / ") if x.strip()]
+    return out
+
+
+def _drop_rejected(path: Path, sid: int, title: str, ext: str, keep: bool) -> None:
+    """校验不通过的文件：默认删掉；keep=True 时留到 /data/verify_failed/ 供人工复查"""
+    if keep:
+        try:
+            dst_dir = Path("/data/verify_failed")
+            dst_dir.mkdir(parents=True, exist_ok=True)
+            name = re.sub(r'[\\/:*?"<>|\x00-\x1f]', "_", f"{sid}_{title}")[:120]
+            path.replace(dst_dir / f"{name}.{ext}")
+            return
+        except OSError:
+            pass
+    try:
+        path.unlink(missing_ok=True)
+    except OSError:
+        pass
+
 
 
 # ---------------------------------------------------------------- 歌单拉取
@@ -401,6 +432,41 @@ async def download_track(cfg: Dict[str, Any], tr: Track, task: Any = None) -> Di
         real = tmp.with_suffix(f".{ext}")
         tmp.replace(real)
 
+        # ---------------- 一致性校验（下载与整理之间的强制关口） ----------------
+        # 必须在 tag_file 之前：演唱者/专辑要比对的是**文件自带的原始标签**
+        # （第三方音源在上游打的），打完我们自己的标签就变成「自己和自己比」，毫无意义。
+        # 不通过 → 删文件、不落 download_dir、不自动归档、不上传云盘。
+        vrep: Optional[Dict[str, Any]] = None
+        vcfg = verify_cfg(cfg)
+        if vcfg.get("enabled", True):
+            ref_meta = {
+                "sid": sid,
+                "title": meta["title"],
+                "duration": float(tr.duration or 0),
+                "artists": _ref_artists(detail, meta),
+                "album": meta["album"],
+            }
+            try:
+                report = await verify_file(real, ref_meta, ncm, cfg,
+                                           source_is_official=not entry.get("third_party"))
+            except Exception as e:  # noqa: BLE001
+                # 校验模块自己出问题（代码缺陷、环境缺件）不能把整条下载链路拖死：
+                # 记为 skipped + 原因，照常往下走，事后能在 verify.jsonl / 任务备注里看到
+                from app.verify import Report as _Report
+                report = _Report(state="skipped",
+                                 error=f"校验模块异常：{type(e).__name__}: {e}")
+            vrep = report.to_dict()
+            log_report(report, {"sid": sid, "title": meta["title"], "artist": meta["artist"],
+                                "source": entry["source"], "level": str(entry.get("level") or ""),
+                                "third_party": bool(entry.get("third_party")),
+                                "file": str(real)})
+            if not report.passed:
+                _drop_rejected(real, sid, meta["title"], ext, bool(vcfg.get("keep_failed")))
+                return {"ok": False, "verify_failed": True, "verify_report": vrep,
+                        "title": meta["title"], "artist": meta["artist"],
+                        "level": str(entry.get("level") or ""), "source": entry["source"],
+                        "reason": report.summary()}
+
         # 网易云接口没给音轨号（no=0）时，用文件自带的编号兜底，
         # 否则会出现「文件名没编号、内嵌标签却有编号」的不一致
         if not meta.get("track"):
@@ -459,7 +525,8 @@ async def download_track(cfg: Dict[str, Any], tr: Track, task: Any = None) -> Di
         return {"ok": True, "title": meta["title"], "artist": meta["artist"],
                 "level": str(entry.get("level") or ""), "source": entry["source"],
                 "warns": warns, "file_path": str(final), "ext": ext,
-                "size": size, "md5": md5hex, "br": int(entry.get("br") or 0)}
+                "size": size, "md5": md5hex, "br": int(entry.get("br") or 0),
+                "verify_report": vrep}
     finally:
         await session.close()
         await ncm.close()
@@ -485,9 +552,20 @@ def save_result(tr_id: int, res: Dict[str, Any]) -> None:
             row.fail_count = 0
             row.last_error = "".join(res.get("warns") or [])[:300]
             row.downloaded_at = _now()
+            # 一致性校验明细（passed / skipped 都记下来，页面上能看「为什么没校验」）
+            vr = res.get("verify_report")
+            if isinstance(vr, dict) and vr:
+                row.verify_state = str(vr.get("state") or "")
+                row.verify_report = vr
+                row.verify_at = _now()
         else:
             row.status = "failed"
             reason = str(res.get("reason") or "未知原因")[:300]
+            if res.get("verify_failed"):
+                # 一致性校验不通过：文件已删，走正常失败退避（不打「临时故障」标记）
+                row.verify_state = "failed"
+                row.verify_report = res.get("verify_report") or {}
+                row.verify_at = _now()
             if res.get("transient"):
                 # 临时故障：**不累加 fail_count**（不占 24 小时长退避的额度），
                 # 只在 last_error 前面打标记，plan_downloads 看到标记就走短退避。

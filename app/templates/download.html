@@ -220,6 +220,9 @@ async function load() {
 function renderQueue(q) {
   const box = document.getElementById('queue');
   const pill = document.getElementById('q-state');
+  // pjax 局部切页的瞬间：脚本已开始轮询，但 <main> 里还没换上本页的 DOM。
+  // 不判断就会抛 "Cannot set properties of null (setting 'className')"。
+  if (!box || !pill) return;
   pill.className = 'pill' + (q.busy ? '' : (q.failed ? ' warn' : ''));
   // 已完成的不留在列表里，pill 也就不再报累计完成数（否则“完成 1”与空列表矛盾）
   pill.innerHTML = '<span class="dot-i"></span>' +

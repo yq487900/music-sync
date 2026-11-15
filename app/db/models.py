@@ -53,6 +53,10 @@ class Track(Base):
     cloud_at = Column(String, default="")
     cloud_error = Column(String, default="")
     track_metadata = Column(JSON, default=dict)
+    # 下载一致性校验（下载与整理之间的强制关口，见 app/verify.py）
+    verify_state = Column(String, default="")     # "" / passed / failed / skipped
+    verify_report = Column(JSON, default=dict)    # 逐项明细（含相似度、本地值、基准值）
+    verify_at = Column(String, default="")
 
 
 class LocalFile(Base):
@@ -81,6 +85,7 @@ def _migrate() -> None:
             "selected": "BOOLEAN", "source_pref": "VARCHAR", "source_used": "VARCHAR",
             "cloud_sid": "VARCHAR", "cloud_state": "VARCHAR", "cloud_at": "VARCHAR",
             "cloud_error": "VARCHAR",
+            "verify_state": "VARCHAR", "verify_report": "JSON", "verify_at": "VARCHAR",
         },
     }
     insp = inspect(engine)
