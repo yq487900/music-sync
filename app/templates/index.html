@@ -107,6 +107,10 @@ const fmtN = (n) => Number(n || 0).toLocaleString('zh-CN');   // 大数字千分
 let HOME = {};
 
 async function loadHome() {
+  // pjax 局部切页瞬间：本页脚本可能先于 <main> 替换被执行，那时 DOM 还属于上一个页面，
+  // 下面这批 getElementById(...).hidden 会拿到 null 抛 TypeError（实测：连续快速切页时偶发）。
+  // #acct 是首页专有元素，不存在就说明当前不是首页 DOM，直接跳过这次调用。
+  if (!document.getElementById('acct')) return;
   const res = await jsonReq('/api/home');
   const errBox = document.getElementById('home-err');
   if (!res.ok) {
